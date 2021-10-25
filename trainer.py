@@ -38,7 +38,6 @@ elif opt.dataset == 'linemod':
 else:
     print('Unknown dataset')
 
-
 # init DataModule
 dataModule = YCBDataModule(opt)
 
@@ -46,11 +45,13 @@ dataModule = YCBDataModule(opt)
 densefusion = DenseFusionModule(opt)
 
 checkpoint_callback = ModelCheckpoint(dirpath='ckpt/', 
-                        filename='dense-fusion-{epoch:02d}'
-                        , every_n_train_steps=1000)
+                        filename='dense-fusion-{epoch:02d}-{val_loss:.2f}',
+                        monitor="val_loss",
+                        every_n_train_steps=1000)
 # most basic trainer, uses good defaults (auto-tensorboard, checkpoints, logs, and more)
 # trainer = pl.Trainer(gpus=8) (if you have GPUs)
 trainer = pl.Trainer(accumulate_grad_batches=opt.batch_size, 
-                        callbacks=[checkpoint_callback]
+                        callbacks=[checkpoint_callback],
+                        max_epochs=opt.nepoch
                         )
 trainer.fit(densefusion, dataModule)

@@ -24,16 +24,34 @@ class DenseFusionModule(pl.LightningModule):
     def __init__(self, opt):
         super().__init__()
         self.opt = opt
+
+        self.opt.manualSeed = random.randint(1, 10000) 
+        random.seed(opt.manualSeed)
+        torch.manual_seed(opt.manualSeed)
+
         self.opt.sym_list = self.trainer.datamodule.sym_list
         self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
         self.estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects)
         self.refiner = PoseRefineNet(num_points = opt.num_points, num_obj = opt.num_objects)
-        # TODO: import num_points_mesh from DataModule
+        if self.opt.start_epoch == 1:
+            for log in os.listdir(self.opt.log_dir):
+                os.remove(os.path.join(self.opt.log_dir, log))
+
+    def on_train_start(self):
         self.criterion = Loss(opt.num_points_mesh, opt.sym_list)
         self.criterion_refine = Loss_refine(opt.num_points_mesh, opt.sym_list)
         self.best_test = np.Inf
 
-    # TODO: why repeat epoch??? optim schedule? 
+    def on_train_epoch_start(self):
+        self.train_dis_avg = 0.0
+        # TODO: do we need this?
+        if opt.refine_start:
+            estimator.eval()
+            refiner.train()
+        else:
+            estimator.train()
+
+    # TODO: why repeat epoch?
     def training_step(self, batch, batch_idx):
         # training_step defined the train loop.
         points, choose, img, target, model_points, idx = batch
@@ -48,13 +66,15 @@ class DenseFusionModule(pl.LightningModule):
         else:
             loss.backward()
 
-        # TODO: what is this?
+        # TODO: average just for printing?? return what?
         train_dis_avg += dis.item()
 
-        # TODO: save ckpt & log for training_step_end
         self.log(train_dis_avg / opt.batch_size)
 
         return loss
+
+    def on_validation_epoch_start(self):
+        self.test_dis = 0.0
 
     # default check_val_every_n_epoch=1 by lightning
     def validation_step(self, batch, batch_idx):
@@ -67,11 +87,11 @@ class DenseFusionModule(pl.LightningModule):
                 pred_r, pred_t = refiner(new_points, emb, idx)
                 dis, new_points, new_target = criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
 
-        test_dis += dis.item()
+        self.test_dis += dis.item()
+        val_loss = self.test_dis / batch_idx
+        self.log('val_loss', val_loss)
         # logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), test_count, dis))
-        return test_dis / test_count
-
-    # TODO: ckpt save bst model
+        return val_loss
 
     def on_validation_epoch_end(self, outputs):
         test_dis = outputs
@@ -93,8 +113,8 @@ class DenseFusionModule(pl.LightningModule):
             self.trainer.datamodule.refine = True
             self.trainer.datamodule.setup()
 
-            criterion = Loss(opt.num_points_mesh, opt.sym_list)
-            criterion_refine = Loss_refine(opt.num_points_mesh, opt.sym_list)
+            self.criterion = Loss(opt.num_points_mesh, opt.sym_list)
+            self.criterion_refine = Loss_refine(opt.num_points_mesh, opt.sym_list)
 
     def configure_optimizers(self):
         if opt.resume_posenet != '':
