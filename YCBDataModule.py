@@ -20,7 +20,8 @@ class YCBDataModule(pl.LightningDataModule):
         log_dir = 'experiments/logs/ycb' #folder to save logs
         repeat_epoch = 1 #number of repeat times for one epoch training
 
-    # def prepare_data(self):
+    def prepare_data(self):
+        os.system('./download.sh')
         # download, split, etc...
         # only called on 1 GPU/TPU in distributed
     def setup(self, stage):
