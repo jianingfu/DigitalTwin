@@ -33,7 +33,7 @@ class DenseFusionModule(pl.LightningModule):
         self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
         self.estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects)
         self.refiner = PoseRefineNet(num_points = opt.num_points, num_obj = opt.num_objects)
-        if self.opt.start_epoch == 1:
+        if opt.start_epoch == 1:
             for log in os.listdir(self.opt.log_dir):
                 os.remove(os.path.join(self.opt.log_dir, log))
 
@@ -51,7 +51,6 @@ class DenseFusionModule(pl.LightningModule):
         else:
             estimator.train()
 
-    # TODO: why repeat epoch?
     def training_step(self, batch, batch_idx):
         # training_step defined the train loop.
         points, choose, img, target, model_points, idx = batch

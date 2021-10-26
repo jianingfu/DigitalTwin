@@ -35,6 +35,7 @@ elif opt.dataset == 'linemod':
     opt.outf = 'trained_models/linemod'
     opt.log_dir = 'experiments/logs/linemod'
     opt.repeat_epoch = 20
+    opt.nepoch = opt.nepoch*opt.repeat_epoch
 else:
     print('Unknown dataset')
 
@@ -52,6 +53,7 @@ checkpoint_callback = ModelCheckpoint(dirpath='ckpt/',
 # trainer = pl.Trainer(gpus=8) (if you have GPUs)
 trainer = pl.Trainer(accumulate_grad_batches=opt.batch_size, 
                         callbacks=[checkpoint_callback],
-                        max_epochs=opt.nepoch
+                        max_epochs=opt.nepoch,
+                        check_val_every_n_epoch=opt.nepoch
                         )
 trainer.fit(densefusion, dataModule)
