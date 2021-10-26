@@ -1,34 +1,38 @@
-# reference: https://github.com/j96w/DenseFusion
-
 from torch.nn.modules.loss import _Loss
 from torch.autograd import Variable
 import torch
+try:
+    from .tools import compute_rotation_matrix_from_ortho6d
+except:
+    from tools import compute_rotation_matrix_from_ortho6d
 import time
 import numpy as np
 import torch.nn as nn
 import random
 import torch.backends.cudnn as cudnn
-from lib.knn.__init__ import KNearestNeighbor
+from knn_cuda import KNN
 
 
 def loss_calculation(pred_r, pred_t, target, model_points, idx, points, num_point_mesh, sym_list):
-    knn = KNearestNeighbor(1)
+    knn = KNN(k=1, transpose_mode=True)
     pred_r = pred_r.view(1, 1, -1)
     pred_t = pred_t.view(1, 1, -1)
     bs, num_p, _ = pred_r.size()
     num_input_points = len(points[0])
 
     pred_r = pred_r / (torch.norm(pred_r, dim=2).view(bs, num_p, 1))
+
+    base = compute_rotation_matrix_from_ortho6d(pred_r)
     
-    base = torch.cat(((1.0 - 2.0*(pred_r[:, :, 2]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1),\
-                      (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] - 2.0*pred_r[:, :, 0]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 3]*pred_r[:, :, 0]).view(bs, num_p, 1), \
-                      (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1), \
-                      (-2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (-2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 2]**2)).view(bs, num_p, 1)), dim=2).contiguous().view(bs * num_p, 3, 3)
+    # base = torch.cat(((1.0 - 2.0*(pred_r[:, :, 2]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1),\
+    #                   (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] - 2.0*pred_r[:, :, 0]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 3]*pred_r[:, :, 0]).view(bs, num_p, 1), \
+    #                   (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1), \
+    #                   (-2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (-2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 2]**2)).view(bs, num_p, 1)), dim=2).contiguous().view(bs * num_p, 3, 3)
     
     ori_base = base
     base = base.contiguous().transpose(2, 1).contiguous()
@@ -41,12 +45,14 @@ def loss_calculation(pred_r, pred_t, target, model_points, idx, points, num_poin
     pred = torch.add(torch.bmm(model_points, base), pred_t)
 
     if idx[0].item() in sym_list:
-        target = target[0].transpose(1, 0).contiguous().view(3, -1)
-        pred = pred.permute(2, 0, 1).contiguous().view(3, -1)
-        inds = knn(target.unsqueeze(0), pred.unsqueeze(0))
-        target = torch.index_select(target, 1, inds.view(-1) - 1)
-        target = target.view(3, bs * num_p, num_point_mesh).permute(1, 2, 0).contiguous()
-        pred = pred.view(3, bs * num_p, num_point_mesh).permute(1, 2, 0).contiguous()
+
+        target = target[0].contiguous().view(-1, 3).unsqueeze(0)
+        pred = pred.contiguous().view(-1, 3).unsqueeze(0)
+
+        dists, inds = knn(target, pred)
+        target = torch.index_select(target, 1, inds.view(-1))
+        target = target.view(bs * num_p, num_point_mesh, 3).contiguous()
+        pred = pred.view(bs * num_p, num_point_mesh, 3).contiguous()
 
     dis = torch.mean(torch.norm((pred - target), dim=2), dim=1)
 
