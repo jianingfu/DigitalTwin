@@ -28,16 +28,16 @@ class YCBDataModule(pl.LightningDataModule):
         # make assignments here (val/train/test split)
         # called on every process in DDP
         if not self.refine:
-            self.train_dataset = PoseDataset_ycb('train', opt.num_points, True, opt.dataset_root, opt.noise_trans, True)
-            self.test_dataset = PoseDataset_ycb('test', opt.num_points, False, opt.dataset_root, 0.0, True)
+            self.train_dataset = PoseDataset_ycb('train', self.opt.num_points, True, self.opt.dataset_root, self.opt.noise_trans, True)
+            self.test_dataset = PoseDataset_ycb('test', self.opt.num_points, False, self.opt.dataset_root, 0.0, True)
         else:
-            self.train_dataset = PoseDataset_ycb('train', opt.num_points, True, opt.dataset_root, opt.noise_trans, opt.refine_start)
-            self.test_dataset = PoseDataset_ycb('test', opt.num_points, False, opt.dataset_root, 0.0, opt.refine_start)
+            self.train_dataset = PoseDataset_ycb('train', self.opt.num_points, True, self.opt.dataset_root, self.opt.noise_trans, self.opt.refine_start)
+            self.test_dataset = PoseDataset_ycb('test', self.opt.num_points, False, self.opt.dataset_root, 0.0, self.opt.refine_start)
         self.sym_list = self.train_dataset.get_sym_list()
         self.num_points_mesh = self.train_dataset.get_num_points_mesh()
 
     def train_dataloader(self):
-        return DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=opt.workers)
+        return DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=self.opt.workers)
 
     def val_dataloader(self):
-        return DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=opt.workers)
+        return DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=self.opt.workers)

@@ -1,5 +1,6 @@
-import DenseFusionModule
-import YCBDataModule
+import torch
+from YCBDataModule import YCBDataModule
+from DenseFusionModule import DenseFusionModule
 import pytorch_lightning as pl
 import argparse
 from pytorch_lightning.callbacks import ModelCheckpoint
