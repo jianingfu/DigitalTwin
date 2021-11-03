@@ -11,16 +11,9 @@ class YCBDataModule(pl.LightningDataModule):
         super().__init__()
         self.opt = opt
         self.refine = False
-        manualSeed = random.randint(1, 10000)
-        random.seed(manualSeed)
-        torch.manual_seed(manualSeed)
-        num_objects = 21 #number of object classes in the dataset
-        num_points = 1000 #number of points on the input pointcloud
-        outf = 'trained_models/ycb' #folder to save trained models
-        log_dir = 'experiments/logs/ycb' #folder to save logs
-        repeat_epoch = 1 #number of repeat times for one epoch training
 
     def prepare_data(self):
+        print("preparing data...")
         os.system('./download.sh')
         # download, split, etc...
         # only called on 1 GPU/TPU in distributed
@@ -28,8 +21,8 @@ class YCBDataModule(pl.LightningDataModule):
         # make assignments here (val/train/test split)
         # called on every process in DDP
         if not self.refine:
-            self.train_dataset = PoseDataset_ycb('train', self.opt.num_points, True, self.opt.dataset_root, self.opt.noise_trans, True)
-            self.test_dataset = PoseDataset_ycb('test', self.opt.num_points, False, self.opt.dataset_root, 0.0, True)
+            self.train_dataset = PoseDataset_ycb('train', self.opt.num_points, True, self.opt.dataset_root, self.opt.noise_trans, self.opt.refine_start)
+            self.test_dataset = PoseDataset_ycb('test', self.opt.num_points, False, self.opt.dataset_root, 0.0, self.opt.refine_start)
         else:
             self.train_dataset = PoseDataset_ycb('train', self.opt.num_points, True, self.opt.dataset_root, self.opt.noise_trans, self.opt.refine_start)
             self.test_dataset = PoseDataset_ycb('test', self.opt.num_points, False, self.opt.dataset_root, 0.0, self.opt.refine_start)
@@ -37,7 +30,7 @@ class YCBDataModule(pl.LightningDataModule):
         self.num_points_mesh = self.train_dataset.get_num_points_mesh()
 
     def train_dataloader(self):
-        return DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=self.opt.workers)
+        return DataLoader(self.train_dataset, batch_size=1, shuffle=True, num_workers=self.opt.workers)
 
     def val_dataloader(self):
-        return DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=self.opt.workers)
+        return DataLoader(self.test_dataset, batch_size=1, shuffle=False, num_workers=self.opt.workers)

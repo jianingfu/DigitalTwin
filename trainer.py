@@ -7,7 +7,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
-parser.add_argument('--dataset_root', type=str, default = '', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
+parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
 parser.add_argument('--batch_size', type=int, default = 8, help='batch size')
 parser.add_argument('--workers', type=int, default = 10, help='number of data loading workers')
 parser.add_argument('--lr', default=0.0001, help='learning rate')
@@ -23,6 +23,9 @@ parser.add_argument('--resume_posenet', type=str, default = '',  help='resume Po
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
 opt = parser.parse_args()
+
+# :)
+opt.refine_start = False
 
 if opt.dataset == 'ycb':
     opt.num_objects = 21 #number of object classes in the dataset
@@ -55,6 +58,8 @@ checkpoint_callback = ModelCheckpoint(dirpath='ckpt/',
 trainer = pl.Trainer(accumulate_grad_batches=opt.batch_size, 
                         callbacks=[checkpoint_callback],
                         max_epochs=opt.nepoch,
-                        check_val_every_n_epoch=opt.nepoch
+                        check_val_every_n_epoch=opt.repeat_epoch,
+                        num_sanity_val_steps=0,
+                        gpus=1,
                         )
 trainer.fit(densefusion, dataModule)

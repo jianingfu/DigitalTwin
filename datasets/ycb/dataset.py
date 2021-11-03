@@ -88,7 +88,7 @@ class PoseDataset(data.Dataset):
         self.norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.symmetry_obj_idx = [12, 15, 18, 19, 20]
         self.num_pt_mesh_small = 500
-        self.num_pt_mesh_large = 2600
+        self.num_pt_mesh_large = 1000
         self.refine = refine
         self.front_num = 2
 
