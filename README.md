@@ -8,3 +8,8 @@ OpenARK 3D pose estimation codebase.
 ```
 pip install pytorch-lightning
 ```
+
+## Train
+```
+python3 trainer.py
+```
