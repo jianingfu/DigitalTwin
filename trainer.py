@@ -59,7 +59,7 @@ trainer = pl.Trainer(accumulate_grad_batches=opt.batch_size,
                         callbacks=[checkpoint_callback],
                         max_epochs=opt.nepoch,
                         check_val_every_n_epoch=opt.repeat_epoch,
-                        num_sanity_val_steps=0,
+                        # num_sanity_val_steps=0, # turn off validation sanity check since we are setting criterion on train start
                         gpus=1,
                         )
 trainer.fit(densefusion, dataModule)

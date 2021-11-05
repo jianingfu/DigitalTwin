@@ -35,7 +35,7 @@ class DenseFusionModule(pl.LightningModule):
             for log in os.listdir(self.opt.log_dir):
                 os.remove(os.path.join(self.opt.log_dir, log))
 
-    def on_train_start(self):
+    def on_pretrain_routine_start(self):
         self.opt.sym_list = self.trainer.datamodule.sym_list
         self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
         print(self.opt.sym_list)
@@ -94,15 +94,16 @@ class DenseFusionModule(pl.LightningModule):
                 dis, new_points, new_target = self.criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
 
         self.test_dis += dis.item()
-        val_loss = self.test_dis / batch_idx
+        val_loss = dis.item()
         self.log('val_loss', val_loss)
         # logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), test_count, dis))
         return val_loss
 
-    def on_validation_epoch_end(self, outputs):
-        test_dis = outputs
+    def validation_epoch_end(self, outputs):
+        test_dis = np.average(np.array(outputs))
         if test_dis <= self.best_test:
-            best_test = test_dis
+            self.best_test = test_dis
+        print("best_test: ", self.best_test) 
 
         if self.best_test < self.opt.decay_margin and not self.opt.decay_start:
             self.opt.decay_start = True
@@ -111,16 +112,21 @@ class DenseFusionModule(pl.LightningModule):
             self.trainer.optimizers[0] = optim.Adam(self.estimator.parameters(), lr=self.opt.lr)
 
         if self.best_test < self.opt.refine_margin and not self.opt.refine_start:
+            print('======Refine started!========')
             self.opt.refine_start = True
             self.opt.batch_size = int(self.opt.batch_size / self.opt.iteration)
             self.trainer.optimizers[0] = optim.Adam(self.refiner.parameters(), lr=self.opt.lr)
 
             # re-setup dataset, TODO: double check/test this
             self.trainer.datamodule.refine = True
-            self.trainer.datamodule.setup()
-
+            self.trainer.datamodule.setup(None)
+            self.opt.sym_list = self.trainer.datamodule.sym_list
+            self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
             self.criterion = Loss(self.opt.num_points_mesh, self.opt.sym_list)
             self.criterion_refine = Loss_refine(self.opt.num_points_mesh, self.opt.sym_list)
+            self.trainer.datamodule.train_dataloader = self.trainer.datamodule.train_dataloader()
+            self.trainer.datamodule.val_dataloader = self.trainer.datamodule.val_dataloader()
+            
 
     def configure_optimizers(self):
         if self.opt.resume_posenet != '':
