@@ -75,7 +75,8 @@ class DenseFusionModule(pl.LightningModule):
                 dis, new_points, new_target = self.criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
                 dis.backward()
 
-        self.log('train_dis', dis, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log_dict({'train_dis':dis, 'loss': loss}, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        # self.log('train_dis', dis, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         return loss
 

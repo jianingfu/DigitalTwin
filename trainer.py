@@ -4,6 +4,7 @@ from DenseFusionModule import DenseFusionModule
 import pytorch_lightning as pl
 import argparse
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
@@ -51,15 +52,18 @@ densefusion = DenseFusionModule(opt)
 
 checkpoint_callback = ModelCheckpoint(dirpath='ckpt/', 
                         filename='dense-fusion-{epoch:02d}-{val_loss:.2f}',
-                        monitor="val_loss",
+                        monitor="loss",
+                        save_last=True,
                         every_n_train_steps=1000)
+
+logger = TensorBoardLogger("tb_logs", name="dense_fusion")
 # most basic trainer, uses good defaults (auto-tensorboard, checkpoints, logs, and more)
 # trainer = pl.Trainer(gpus=8) (if you have GPUs)
-trainer = pl.Trainer(accumulate_grad_batches=opt.batch_size, 
+trainer = pl.Trainer(logger=logger, accumulate_grad_batches=opt.batch_size, 
                         callbacks=[checkpoint_callback],
                         max_epochs=opt.nepoch,
                         check_val_every_n_epoch=opt.repeat_epoch,
-                        # num_sanity_val_steps=0, # turn off validation sanity check since we are setting criterion on train start
                         gpus=1,
+                        resume_from_checkpoint="ckpt/dense-fusion-epoch=08-val_loss=0.02.ckpt",
                         )
-trainer.fit(densefusion, dataModule)
+trainer.fit(densefusion, datamodule=dataModule)
