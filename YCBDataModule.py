@@ -10,7 +10,6 @@ class YCBDataModule(pl.LightningDataModule):
     def __init__(self, opt):
         super().__init__()
         self.opt = opt
-        self.refine = False
 
     def prepare_data(self):
         print("preparing data...")
@@ -22,8 +21,10 @@ class YCBDataModule(pl.LightningDataModule):
         print("refine start: " ,self.opt.refine_start)
         # make assignments here (val/train/test split)
         # called on every process in DDP
-        self.train_dataset = PoseDataset_ycb('train', self.opt.num_points, True, self.opt.dataset_root, self.opt.noise_trans, self.opt.refine_start)
-        self.test_dataset = PoseDataset_ycb('test', self.opt.num_points, False, self.opt.dataset_root, 0.0, self.opt.refine_start)
+        self.train_dataset = PoseDataset_ycb('train', self.opt.num_points, True, self.opt.dataset_root, self.opt.noise_trans, 
+                            self.opt.refine_start, num_rot_bins = self.opt.num_rot_bins, perform_profiling=self.opt.profile)
+        self.test_dataset = PoseDataset_ycb('test', self.opt.num_points, False, self.opt.dataset_root, 
+                            0.0, self.opt.refine_start, num_rot_bins = self.opt.num_rot_bins, perform_profiling=self.opt.profile)
         self.sym_list = self.train_dataset.get_sym_list()
         self.num_points_mesh = self.train_dataset.get_num_points_mesh()
         print("num points mesh", self.num_points_mesh)

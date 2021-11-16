@@ -18,6 +18,7 @@ from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
 import pytorch_lightning as pl
+from datetime import datetime
 
 
 class DenseFusionModule(pl.LightningModule):
@@ -29,23 +30,16 @@ class DenseFusionModule(pl.LightningModule):
         random.seed(self.opt.manualSeed)
         torch.manual_seed(self.opt.manualSeed)
 
-        self.estimator = PoseNet(num_points = self.opt.num_points, num_obj = self.opt.num_objects)
-        self.refiner = PoseRefineNet(num_points = self.opt.num_points, num_obj = self.opt.num_objects)
+        self.estimator = PoseNet(num_points = self.opt.num_points, num_obj = self.opt.num_objects, num_rot_bins = self.opt.num_rot_bins)
+        self.refiner = PoseRefineNet(num_points = self.opt.num_points, num_obj = self.opt.num_objects, num_rot_bins = self.opt.num_rot_bins)
         if self.opt.start_epoch == 1:
             for log in os.listdir(self.opt.log_dir):
                 os.remove(os.path.join(self.opt.log_dir, log))
-
-    def on_pretrain_routine_start(self):
-        self.opt.sym_list = self.trainer.datamodule.sym_list
-        self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
-        print(self.opt.sym_list)
-        print(self.opt.num_points_mesh)
-        self.criterion = Loss(self.opt.num_points_mesh, self.opt.sym_list)
-        self.criterion_refine = Loss_refine(self.opt.num_points_mesh, self.opt.sym_list)
         self.best_test = np.Inf
+        self.criterion = Loss(self.opt.num_rot_bins)
+        self.criterion_refine = Loss_refine(self.opt.num_rot_bins)
 
     def on_train_epoch_start(self):
-        self.train_dis_avg = 0.0
         # TODO: do we need this?
         if self.opt.refine_start:
             self.estimator.eval()
@@ -59,43 +53,56 @@ class DenseFusionModule(pl.LightningModule):
             loss.backward()
 
     def training_step(self, batch, batch_idx):
+        if self.opt.profile:
+                    print("starting training sample {0} {1}".format(batch_idx, datetime.now()))
         # training_step defined the train loop.
-        points, choose, img, target, model_points, idx = batch
-        pred_r, pred_t, pred_c, emb = self.estimator(img, points, choose, idx)
-        torch.cuda.empty_cache()
-        loss, dis, new_points, new_target = self.criterion(pred_r, pred_t, pred_c, target, 
-                                                            model_points, idx, points, self.opt.w, 
-                                                            self.opt.refine_start)
+        points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = batch
 
-                        
+        pred_front, pred_rot_bins, pred_t, pred_c, emb = self.estimator(img, points, choose, idx)
+
+        # torch.cuda.empty_cache()
+        if self.opt.profile:
+            print("finished forward pass {0} {1}".format(batch_idx, datetime.now()))
+
+        loss, new_points, new_rot_bins, new_t = self.criterion(pred_front, pred_rot_bins, pred_t, 
+                                                                pred_c, front_r, rot_bins, front_orig, 
+                                                                t, idx, model_points, points, self.opt.w, 
+                                                                self.opt.refine_start)
+
+        if self.opt.profile:
+            print("finished loss {0} {1}".format(batch_idx, datetime.now()))
         
         if self.opt.refine_start:
             for ite in range(0, self.opt.iteration):
-                pred_r, pred_t = self.refiner(new_points, emb, idx)
-                dis, new_points, new_target = self.criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
-                dis.backward()
+                pred_front, pred_rot_bins, pred_t = self.refiner(new_points, emb, idx)
+                loss, new_points, new_rot_bins, new_t = self.criterion_refine(pred_front, pred_rot_bins, 
+                                    pred_t, front_r, new_rot_bins, front_orig, new_t, idx, new_points)
+                loss.backward()
 
-        self.log_dict({'train_dis':dis, 'loss': loss}, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        # self.log('train_dis', dis, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-
+        # self.log_dict({'train_dis':dis, 'loss': loss}, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        if self.opt.profile:
+                    print("finished training sample {0} {1}".format(batch_idx, datetime.now()))
         return loss
 
     def on_validation_epoch_start(self):
-        self.test_dis = 0.0
+        self.test_loss = 0.0
 
     # default check_val_every_n_epoch=1 by lightning
     def validation_step(self, batch, batch_idx):
-        points, choose, img, target, model_points, idx = batch
-        pred_r, pred_t, pred_c, emb = self.estimator(img, points, choose, idx)
-        _, dis, new_points, new_target = self.criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, self.opt.w, self.opt.refine_start)
+        points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = batch
+        pred_front, pred_rot_bins, pred_t, pred_c, emb = self.estimator(img, points, choose, idx)
+        loss, new_points, new_rot_bins, new_t = self.criterion(pred_front, pred_rot_bins, pred_t, 
+                                        pred_c, front_r, rot_bins, front_orig, t, idx, model_points, 
+                                        points, self.opt.w, self.opt.refine_start)
 
         if self.opt.refine_start:
             for ite in range(0, self.opt.iteration):
-                pred_r, pred_t = self.refiner(new_points, emb, idx)
-                dis, new_points, new_target = self.criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
-
-        self.test_dis += dis.item()
-        val_loss = dis.item()
+                pred_front, pred_rot_bins, pred_t = self.refiner(new_points, emb, idx)
+                loss, new_points, new_rot_bins, new_t = self.criterion_refine(pred_front, pred_rot_bins, 
+                            pred_t, front_r, new_rot_bins, front_orig, new_t, idx, new_points)
+        self.test_loss += loss.item()
+        val_loss = loss.item()
         self.log('val_loss', val_loss)
         # logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), test_count, dis))
         return val_loss
@@ -119,12 +126,7 @@ class DenseFusionModule(pl.LightningModule):
             self.trainer.optimizers[0] = optim.Adam(self.refiner.parameters(), lr=self.opt.lr)
 
             # re-setup dataset, TODO: double check/test this
-            self.trainer.datamodule.refine = True
             self.trainer.datamodule.setup(None)
-            self.opt.sym_list = self.trainer.datamodule.sym_list
-            self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
-            self.criterion = Loss(self.opt.num_points_mesh, self.opt.sym_list)
-            self.criterion_refine = Loss_refine(self.opt.num_points_mesh, self.opt.sym_list)
             self.trainer.datamodule.train_dataloader = self.trainer.datamodule.train_dataloader()
             self.trainer.datamodule.val_dataloader = self.trainer.datamodule.val_dataloader()
             

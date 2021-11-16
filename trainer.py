@@ -1,4 +1,5 @@
 import torch
+import os
 from YCBDataModule import YCBDataModule
 from DenseFusionModule import DenseFusionModule
 import pytorch_lightning as pl
@@ -23,7 +24,12 @@ parser.add_argument('--nepoch', type=int, default=500, help='max number of epoch
 parser.add_argument('--resume_posenet', type=str, default = '',  help='resume PoseNet model')
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
+
+parser.add_argument('--num_rot_bins', type=int, default = 180, help='number of bins discretizing the rotation around front')
+# TODO: lightning has a built in performance profile, set that up!
+parser.add_argument('--profile', action="store_true", default=False, help='should we performance profile?')
 opt = parser.parse_args()
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 # :)
 opt.refine_start = False
