@@ -40,31 +40,55 @@ class PoseNetFeat(nn.Module):
     def __init__(self, num_points):
         super(PoseNetFeat, self).__init__()
         self.conv1 = torch.nn.Conv1d(3, 64, 1)
+        #self.bn1 = torch.nn.BatchNorm1d(64)
         self.conv2 = torch.nn.Conv1d(64, 128, 1)
+        #self.bn2 = torch.nn.BatchNorm1d(128)
 
         self.e_conv1 = torch.nn.Conv1d(32, 64, 1)
+        #self.e_bn1 = torch.nn.BatchNorm1d(64)
         self.e_conv2 = torch.nn.Conv1d(64, 128, 1)
+        #self.e_bn2 = torch.nn.BatchNorm1d(128)
 
         self.conv5 = torch.nn.Conv1d(256, 512, 1)
+        #self.bn5 = torch.nn.BatchNorm1d(512)
         self.conv6 = torch.nn.Conv1d(512, 1024, 1)
+        #self.bn6 = torch.nn.BatchNorm1d(1024)
 
         self.ap1 = torch.nn.AvgPool1d(num_points)
         self.num_points = num_points
     def forward(self, x, emb):
+
+        #"pointnet" layer
+        #XYZ -> 64 dim embedding
         x = F.relu(self.conv1(x))
+
+        #32 dim embedding -> 64 dim embedding
         emb = F.relu(self.e_conv1(emb))
+
+        #concating them
         pointfeat_1 = torch.cat((x, emb), dim=1)
 
+        #64 dim embedding -> 128 dim embedding
         x = F.relu(self.conv2(x))
+        #64 dim embedding -> 128 dim embedding
         emb = F.relu(self.e_conv2(emb))
+
+        #concating them
         pointfeat_2 = torch.cat((x, emb), dim=1)
 
+        #lifting fused 128 + 128 -> 512
         x = F.relu(self.conv5(pointfeat_2))
+
+        #lifting fused 256 + 256 -> 1024
         x = F.relu(self.conv6(x))
 
+        #average pooling on into 1 1024 global feature
         ap_x = self.ap1(x)
 
+        #repeat it so they can staple it onto the back of every pixel/point
         ap_x = ap_x.view(-1, 1024, 1).repeat(1, 1, self.num_points)
+
+        #64 + 64 (level 1), 128 + 128 (level 2), 1024 global feature
         return torch.cat([pointfeat_1, pointfeat_2, ap_x], 1) #128 + 256 + 1024
 
 class PoseNet(nn.Module):
@@ -86,7 +110,7 @@ class PoseNet(nn.Module):
         self.conv3_t = torch.nn.Conv1d(256, 128, 1)
         self.conv3_c = torch.nn.Conv1d(256, 128, 1)
 
-        self.conv4_r = torch.nn.Conv1d(128, num_obj*4, 1) #quaternion
+        self.conv4_r = torch.nn.Conv1d(128, num_obj*6, 1) #6d rot
         self.conv4_t = torch.nn.Conv1d(128, num_obj*3, 1) #translation
         self.conv4_c = torch.nn.Conv1d(128, num_obj*1, 1) #confidence
 
@@ -102,6 +126,9 @@ class PoseNet(nn.Module):
         emb = torch.gather(emb, 2, choose).contiguous()
         
         x = x.transpose(2, 1).contiguous()
+
+        #x is pointcloud
+        #emb is cnn embedding
         ap_x = self.feat(x, emb)
 
         rx = F.relu(self.conv1_r(ap_x))
@@ -116,7 +143,7 @@ class PoseNet(nn.Module):
         tx = F.relu(self.conv3_t(tx))
         cx = F.relu(self.conv3_c(cx))
 
-        rx = self.conv4_r(rx).view(bs, self.num_obj, 4, self.num_points)
+        rx = self.conv4_r(rx).view(bs, self.num_obj, 6, self.num_points)
         tx = self.conv4_t(tx).view(bs, self.num_obj, 3, self.num_points)
         cx = torch.sigmoid(self.conv4_c(cx)).view(bs, self.num_obj, 1, self.num_points)
         
@@ -179,7 +206,7 @@ class PoseRefineNet(nn.Module):
         self.conv2_r = torch.nn.Linear(512, 128)
         self.conv2_t = torch.nn.Linear(512, 128)
 
-        self.conv3_r = torch.nn.Linear(128, num_obj*4) #quaternion
+        self.conv3_r = torch.nn.Linear(128, num_obj*6) #6d rot
         self.conv3_t = torch.nn.Linear(128, num_obj*3) #translation
 
         self.num_obj = num_obj
@@ -196,7 +223,7 @@ class PoseRefineNet(nn.Module):
         rx = F.relu(self.conv2_r(rx))
         tx = F.relu(self.conv2_t(tx))
 
-        rx = self.conv3_r(rx).view(bs, self.num_obj, 4)
+        rx = self.conv3_r(rx).view(bs, self.num_obj, 6)
         tx = self.conv3_t(tx).view(bs, self.num_obj, 3)
 
         b = 0
