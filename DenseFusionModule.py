@@ -64,7 +64,7 @@ class DenseFusionModule(pl.LightningModule):
         if self.opt.profile:
             print("finished forward pass {0} {1}".format(batch_idx, datetime.now()))
 
-        loss, new_points, new_rot_bins, new_t = self.criterion(pred_front, pred_rot_bins, pred_t, 
+        loss, new_points, new_rot_bins, new_t, front_loss, rot_bins_loss, t_loss, mean_pred_c, max_pred_c = self.criterion(pred_front, pred_rot_bins, pred_t, 
                                                                 pred_c, front_r, rot_bins, front_orig, 
                                                                 t, idx, model_points, points, self.opt.w, 
                                                                 self.opt.refine_start)
@@ -81,6 +81,11 @@ class DenseFusionModule(pl.LightningModule):
 
         # self.log_dict({'train_dis':dis, 'loss': loss}, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('front_loss', front_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        self.log('rot_bins_loss', rot_bins_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        self.log('t_loss', t_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        self.log('mean_pred_c', mean_pred_c, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        self.log('max_pred_c', max_pred_c, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         if self.opt.profile:
                     print("finished training sample {0} {1}".format(batch_idx, datetime.now()))
         return loss
@@ -92,7 +97,7 @@ class DenseFusionModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = batch
         pred_front, pred_rot_bins, pred_t, pred_c, emb = self.estimator(img, points, choose, idx)
-        loss, new_points, new_rot_bins, new_t = self.criterion(pred_front, pred_rot_bins, pred_t, 
+        loss, new_points, new_rot_bins, new_t, front_loss, rot_bins_loss, t_loss, mean_pred_c, max_pred_c  = self.criterion(pred_front, pred_rot_bins, pred_t, 
                                         pred_c, front_r, rot_bins, front_orig, t, idx, model_points, 
                                         points, self.opt.w, self.opt.refine_start)
 
@@ -103,14 +108,23 @@ class DenseFusionModule(pl.LightningModule):
                             pred_t, front_r, new_rot_bins, front_orig, new_t, idx, new_points)
         self.test_loss += loss.item()
         val_loss = loss.item()
-        self.log('val_loss', val_loss)
+        self.log('val_loss', val_loss, logger=True)
+        self.log('front_loss', front_loss, logger=True)
+        self.log('rot_bins_loss', rot_bins_loss, logger=True)
+        self.log('t_loss', t_loss, logger=True)
+        self.log('mean_pred_c', mean_pred_c, logger=True)
+        self.log('max_pred_c', max_pred_c, logger=True)
         # logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), test_count, dis))
         return val_loss
 
     def validation_epoch_end(self, outputs):
-        test_dis = np.average(np.array(outputs))
-        if test_dis <= self.best_test:
-            self.best_test = test_dis
+        test_loss = np.average(np.array(outputs))
+        if test_loss <= self.best_test:
+            self.best_test = test_loss
+            if self.opt.refine_start:
+                torch.save(self.refiner.state_dict(), '{0}/pose_refine_model_{1}_{2}.pth'.format(self.opt.outf, self.current_epoch, test_loss))
+            else:
+                torch.save(self.estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(self.opt.outf, self.current_epoch, test_loss))
         print("best_test: ", self.best_test) 
 
         if self.best_test < self.opt.decay_margin and not self.opt.decay_start:

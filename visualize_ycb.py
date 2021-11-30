@@ -79,7 +79,7 @@ def main():
     parser.add_argument('--w', default=0.015, help='regularize confidence')
     parser.add_argument('--w_rate', default=0.3, help='regularize confidence refiner decay')
 
-    parser.add_argument('--num_rot_bins', type=int, default = 180, help='number of bins discretizing the rotation around front')
+    parser.add_argument('--num_rot_bins', type=int, default = 18, help='number of bins discretizing the rotation around front')
     parser.add_argument('--num_visualized', type=int, default = 5, help='number of training samples to visualize')
     opt = parser.parse_args()
 
@@ -147,7 +147,7 @@ def main():
                                                             Variable(model_points).cuda(), \
                                                             Variable(idx).cuda()
         pred_front, pred_rot_bins, pred_t, pred_c, emb = estimator(img, points, choose, idx)
-        loss, new_points, new_rot_bins, new_t = criterion(pred_front, pred_rot_bins, pred_t, pred_c, front_r, rot_bins, front_orig, t, idx, model_points, points, opt.w, opt.refine_model != "")
+        loss, new_points, new_rot_bins, new_t, _, _, _, _, _ = criterion(pred_front, pred_rot_bins, pred_t, pred_c, front_r, rot_bins, front_orig, t, idx, model_points, points, opt.w, opt.refine_model != "")
 
         print("here!", pred_front.shape, pred_rot_bins.shape, pred_t.shape, pred_c.shape)
 
