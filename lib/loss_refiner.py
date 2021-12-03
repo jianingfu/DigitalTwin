@@ -84,7 +84,7 @@ def loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front
         new_t = torch.unsqueeze(t[:,0,:] - pred_t[:,0,:], 1)
 
     # # print('------------> ', dis[0][which_max[0]].item(), pred_c[0][which_max[0]].item(), idx[0].item())
-    return loss, new_points, new_rot_bins, new_t
+    return loss, new_points, new_rot_bins, new_t, pred_front_dis * front_loss_coeff, pred_rot_loss * rot_bins_loss_coeff, pred_t_loss * translation_loss_coeff
 
 
 class Loss_refine(_Loss):

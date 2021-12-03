@@ -38,7 +38,7 @@ if opt.dataset == 'ycb':
     opt.num_objects = 21 #number of object classes in the dataset
     opt.num_points = 1000 #number of points on the input pointcloud
     opt.outf = 'trained_models/ycb' #folder to save trained models
-    opt.log_dir = 'experiments/logs/ycb' #folder to save logs
+    opt.log_dir = 'tb_logs/dense_fusion' #folder to save logs
     opt.repeat_epoch = 1 #number of repeat times for one epoch training
 elif opt.dataset == 'linemod':
     opt.num_objects = 13
@@ -70,6 +70,7 @@ trainer = pl.Trainer(logger=logger, accumulate_grad_batches=opt.batch_size,
                         max_epochs=opt.nepoch,
                         check_val_every_n_epoch=opt.repeat_epoch,
                         gpus=1,
-                        resume_from_checkpoint="ckpt/dense-fusion-epoch=08-val_loss=0.02.ckpt",
+                        profiler="advanced",
+                        # resume_from_checkpoint="ckpt/dense-fusion-epoch=08-val_loss=0.02.ckpt",
                         )
 trainer.fit(densefusion, datamodule=dataModule)

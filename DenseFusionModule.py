@@ -32,9 +32,10 @@ class DenseFusionModule(pl.LightningModule):
 
         self.estimator = PoseNet(num_points = self.opt.num_points, num_obj = self.opt.num_objects, num_rot_bins = self.opt.num_rot_bins)
         self.refiner = PoseRefineNet(num_points = self.opt.num_points, num_obj = self.opt.num_objects, num_rot_bins = self.opt.num_rot_bins)
-        if self.opt.start_epoch == 1:
-            for log in os.listdir(self.opt.log_dir):
-                os.remove(os.path.join(self.opt.log_dir, log))
+        # if self.opt.start_epoch == 1:
+        #     if os.path.isdir(self.opt.log_dir):
+        #         for log in os.listdir(self.opt.log_dir):
+        #             os.remove(os.path.join(self.opt.log_dir, log))
         self.best_test = np.Inf
         self.criterion = Loss(self.opt.num_rot_bins)
         self.criterion_refine = Loss_refine(self.opt.num_rot_bins)
@@ -64,7 +65,7 @@ class DenseFusionModule(pl.LightningModule):
         if self.opt.profile:
             print("finished forward pass {0} {1}".format(batch_idx, datetime.now()))
 
-        loss, new_points, new_rot_bins, new_t = self.criterion(pred_front, pred_rot_bins, pred_t, 
+        loss, new_points, new_rot_bins, new_t, front_loss, rot_loss, t_loss = self.criterion(pred_front, pred_rot_bins, pred_t, 
                                                                 pred_c, front_r, rot_bins, front_orig, 
                                                                 t, idx, model_points, points, self.opt.w, 
                                                                 self.opt.refine_start)
@@ -75,12 +76,12 @@ class DenseFusionModule(pl.LightningModule):
         if self.opt.refine_start:
             for ite in range(0, self.opt.iteration):
                 pred_front, pred_rot_bins, pred_t = self.refiner(new_points, emb, idx)
-                loss, new_points, new_rot_bins, new_t = self.criterion_refine(pred_front, pred_rot_bins, 
+                loss, new_points, new_rot_bins, new_t, front_loss, rot_loss, t_loss = self.criterion_refine(pred_front, pred_rot_bins, 
                                     pred_t, front_r, new_rot_bins, front_orig, new_t, idx, new_points)
                 loss.backward()
 
-        # self.log_dict({'train_dis':dis, 'loss': loss}, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log_dict({'loss': loss, 'front_dis': front_loss, 'rot_loss': rot_loss, 't_loss': t_loss}, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        # self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         if self.opt.profile:
                     print("finished training sample {0} {1}".format(batch_idx, datetime.now()))
         return loss
