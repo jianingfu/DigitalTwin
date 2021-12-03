@@ -1,5 +1,7 @@
 import torch
 from YCBDataModule import YCBDataModule
+from LinemodDataModule import LinemodDataModule
+from CustomDataModule import CustomDataModule
 from DenseFusionModule import DenseFusionModule
 import pytorch_lightning as pl
 import argparse
@@ -7,7 +9,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
+parser.add_argument('--dataset', type=str, default = 'custom', help='ycb or linemod')
 parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
 parser.add_argument('--batch_size', type=int, default = 8, help='batch size')
 parser.add_argument('--workers', type=int, default = 10, help='number of data loading workers')
@@ -27,43 +29,56 @@ opt = parser.parse_args()
 
 # :)
 opt.refine_start = False
+if __name__ == '__main__':
+    torch.multiprocessing.freeze_support()
 
-if opt.dataset == 'ycb':
-    opt.num_objects = 21 #number of object classes in the dataset
-    opt.num_points = 1000 #number of points on the input pointcloud
-    opt.outf = 'trained_models/ycb' #folder to save trained models
-    opt.log_dir = 'experiments/logs/ycb' #folder to save logs
-    opt.repeat_epoch = 1 #number of repeat times for one epoch training
-elif opt.dataset == 'linemod':
-    opt.num_objects = 13
-    opt.num_points = 500
-    opt.outf = 'trained_models/linemod'
-    opt.log_dir = 'experiments/logs/linemod'
-    opt.repeat_epoch = 20
-    opt.nepoch = opt.nepoch*opt.repeat_epoch
-else:
-    print('Unknown dataset')
+    if opt.dataset == 'ycb':
+        opt.num_objects = 21 #number of object classes in the dataset
+        opt.num_points = 1000 #number of points on the input pointcloud
+        opt.outf = 'trained_models/ycb' #folder to save trained models
+        opt.log_dir = 'experiments/logs/ycb' #folder to save logs
+        opt.repeat_epoch = 1 #number of repeat times for one epoch training
+        # init DataModule
+        dataModule = YCBDataModule(opt)
+    elif opt.dataset == 'linemod':
+        opt.num_objects = 13
+        opt.num_points = 500
+        opt.outf = 'trained_models/linemod'
+        opt.log_dir = 'experiments/logs/linemod'
+        opt.repeat_epoch = 20
+        opt.nepoch = opt.nepoch*opt.repeat_epoch
+        # init DataModule
+        dataModule = LinemodDataModule(opt)
+    elif opt.dataset == 'custom':
+        opt.dataset_root = 'datasets/custom/custom_preprocessed'
+        opt.num_objects = 1
+        opt.num_points = 500
+        opt.outf = 'trained_models/custom'
+        opt.log_dir = 'experiments/logs/custom'
+        opt.repeat_epoch = 1
+        # init DataModule
+        dataModule = CustomDataModule(opt)
+    else:
+        print('Unknown dataset')
 
-# init DataModule
-dataModule = YCBDataModule(opt)
 
-# init model
-densefusion = DenseFusionModule(opt)
+    # init model
+    densefusion = DenseFusionModule(opt)
 
-checkpoint_callback = ModelCheckpoint(dirpath='ckpt/', 
-                        filename='dense-fusion-{epoch:02d}-{val_loss:.2f}',
-                        monitor="loss",
-                        save_last=True,
-                        every_n_train_steps=1000)
+    checkpoint_callback = ModelCheckpoint(dirpath='ckpt/', 
+                            filename='dense-fusion-{epoch:02d}-{val_loss:.2f}',
+                            monitor="loss",
+                            save_last=True,
+                            every_n_train_steps=1000)
 
-logger = TensorBoardLogger("tb_logs", name="dense_fusion")
-# most basic trainer, uses good defaults (auto-tensorboard, checkpoints, logs, and more)
-# trainer = pl.Trainer(gpus=8) (if you have GPUs)
-trainer = pl.Trainer(logger=logger, accumulate_grad_batches=opt.batch_size, 
-                        callbacks=[checkpoint_callback],
-                        max_epochs=opt.nepoch,
-                        check_val_every_n_epoch=opt.repeat_epoch,
-                        gpus=1,
-                        resume_from_checkpoint="ckpt/dense-fusion-epoch=08-val_loss=0.02.ckpt",
-                        )
-trainer.fit(densefusion, datamodule=dataModule)
+    logger = TensorBoardLogger("tb_logs", name="dense_fusion")
+    # most basic trainer, uses good defaults (auto-tensorboard, checkpoints, logs, and more)
+    # trainer = pl.Trainer(gpus=8) (if you have GPUs)
+    trainer = pl.Trainer(logger=logger, accumulate_grad_batches=opt.batch_size, 
+                            callbacks=[checkpoint_callback],
+                            max_epochs=opt.nepoch,
+                            check_val_every_n_epoch=opt.repeat_epoch,
+                            gpus=1,
+                            resume_from_checkpoint= opt.resume_posenet,
+                            )
+    trainer.fit(densefusion, datamodule=dataModule)
