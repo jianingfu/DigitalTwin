@@ -13,7 +13,7 @@ cross_entropy_loss = nn.CrossEntropyLoss(reduction='none')
 
 rot_bins_loss_coeff = 1
 front_loss_coeff = 1
-translation_loss_coeff = 4
+translation_loss_coeff = 10
 
 def loss_calculation(pred_front, pred_rot_bins, pred_t, pred_c, front_r, rot_bins, front_orig, t, idx, model_points, points, w, refine, num_rot_bins):
 
@@ -43,6 +43,9 @@ def loss_calculation(pred_front, pred_rot_bins, pred_t, pred_c, front_r, rot_bin
     #requires finding highest confidence front and theta and solving for rotation matrix
 
     points = points.contiguous().view(bs * num_p, 1, 3)
+
+    mean_pred_c = torch.mean(pred_c)
+    max_pred_c = torch.max(pred_c)
     
     pred_c = pred_c.view(bs, num_p)
     how_max, which_max = torch.max(pred_c, 1)
@@ -84,7 +87,7 @@ def loss_calculation(pred_front, pred_rot_bins, pred_t, pred_c, front_r, rot_bin
     new_t = torch.unsqueeze(t[:,0,:] - pred_t[:,0,:], 1)
 
     # # print('------------> ', dis[0][which_max[0]].item(), pred_c[0][which_max[0]].item(), idx[0].item())
-    return loss, new_points, new_rot_bins, new_t, pred_front_dis * front_loss_coeff, pred_rot_loss * rot_bins_loss_coeff, pred_t_loss * translation_loss_coeff
+    return loss, new_points, new_rot_bins, new_t, torch.mean(front_loss_coeff * pred_front_dis * pred_c), torch.mean(rot_bins_loss_coeff * pred_rot_loss * pred_c), torch.mean(translation_loss_coeff * pred_t_loss * pred_c), mean_pred_c, max_pred_c
 
 
 class Loss(_Loss):
