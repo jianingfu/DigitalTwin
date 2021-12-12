@@ -125,16 +125,19 @@ class DenseFusionModule(pl.LightningModule):
             self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
             self.criterion = Loss(self.opt.num_points_mesh, self.opt.sym_list)
             self.criterion_refine = Loss_refine(self.opt.num_points_mesh, self.opt.sym_list)
-            self.trainer.datamodule.train_dataloader = self.trainer.datamodule.train_dataloader()
-            self.trainer.datamodule.val_dataloader = self.trainer.datamodule.val_dataloader()
+            print("start reloading data")
+            self.trainer.datamodule.train_dataloader()
+            self.trainer.datamodule.val_dataloader()
             
 
     def configure_optimizers(self):
-        if self.opt.resume_posenet != '':
-            self.estimator.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_posenet)))
+        # if self.opt.resume_posenet != '':
+            # self.estimator.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_posenet)))
+            # self.estimator.load_state_dict(torch.load(self.opt.resume_posenet))
 
         if self.opt.resume_refinenet != '':
-            self.refiner.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_refinenet)))
+            # self.refiner.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_refinenet)))
+            self.refiner.load_state_dict(torch.load(self.opt.resume_refinenet))
             self.opt.refine_start = True
             self.opt.decay_start = True
             self.opt.lr *= self.opt.lr_rate

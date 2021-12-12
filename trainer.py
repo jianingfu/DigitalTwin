@@ -18,11 +18,11 @@ parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--w', default=0.015, help='learning rate')
 parser.add_argument('--w_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--decay_margin', default=0.016, help='margin to decay lr & w')
-parser.add_argument('--refine_margin', default=0.013, help='margin to start the training of iterative refinement')
+parser.add_argument('--refine_margin', default=0.0043, help='margin to start the training of iterative refinement')
 parser.add_argument('--noise_trans', default=0.03, help='range of the random noise of translation added to the training data')
 parser.add_argument('--iteration', type=int, default = 2, help='number of refinement iterations')
 parser.add_argument('--nepoch', type=int, default=500, help='max number of epochs to train')
-parser.add_argument('--resume_posenet', type=str, default = '',  help='resume PoseNet model')
+parser.add_argument('--resume_posenet', type=str, default = 'ckpt/last.ckpt',  help='resume PoseNet model')
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
 opt = parser.parse_args()
@@ -61,22 +61,25 @@ if __name__ == '__main__':
     else:
         print('Unknown dataset')
 
+    if opt.resume_refinenet != '':
+        opt.refine_start = True
 
     # init model
     densefusion = DenseFusionModule(opt)
 
     checkpoint_callback = ModelCheckpoint(dirpath='ckpt/', 
-                            filename='dense-fusion-{epoch:02d}-{val_loss:.2f}',
+                            filename='df-{epoch:02d}-{val_loss:.5f}',
                             monitor="loss",
                             save_last=True,
-                            every_n_train_steps=1000)
+                            save_top_k=1,
+                            every_n_epochs=1)
 
     logger = TensorBoardLogger("tb_logs", name="dense_fusion")
     # most basic trainer, uses good defaults (auto-tensorboard, checkpoints, logs, and more)
     # trainer = pl.Trainer(gpus=8) (if you have GPUs)
     trainer = pl.Trainer(logger=logger, accumulate_grad_batches=opt.batch_size, 
                             callbacks=[checkpoint_callback],
-                            max_epochs=opt.nepoch,
+                            max_epochs=opt.nepoch - opt.start_epoch,
                             check_val_every_n_epoch=opt.repeat_epoch,
                             gpus=1,
                             resume_from_checkpoint= opt.resume_posenet,
