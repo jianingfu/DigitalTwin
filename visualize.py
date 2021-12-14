@@ -210,9 +210,25 @@ def main():
                 my_t_final = np.array([my_mat_final[0][3], my_mat_final[1][3], my_mat_final[2][3]])
 
                 #my_pred = np.append(my_r_final, my_t_final)
-                my_t = my_t_final
+                my_t = my_t_final    
 
         my_r = copy.deepcopy(my_rot_mat)
+
+        model_points = model_points[0].cpu().detach().numpy()
+
+        # my_r = quaternion_matrix(my_r)[:3, :3]
+        pred = np.dot(model_points, my_r.T) + my_t
+        target = target[0].cpu().detach().numpy()
+
+        dis = np.mean(np.linalg.norm(pred - target, axis=1))
+
+        if dis < 0.005:
+            success_count[idx[0].item()] += 1
+            print('No.{0} Pass! Distance: {1}'.format(i, dis))
+            fw.write('No.{0} Pass! Distance: {1}\n'.format(i, dis))
+        else:
+            print('No.{0} NOT Pass! Distance: {1}'.format(i, dis))
+            fw.write('No.{0} NOT Pass! Distance: {1}\n'.format(i, dis))
 
         visualize_points(model_points, my_t, my_r, "{0}_pred".format(i))
         visualize_pointcloud(target, "{0}_target".format(i))
