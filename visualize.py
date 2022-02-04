@@ -38,7 +38,7 @@ import open3d as o3d
 
 def visualize_points(model_points, t, rot_mat, label):
 
-    model_points = model_points.cpu().detach().numpy()
+    # model_points = model_points.cpu().detach().numpy()
 
     pts = (model_points @ rot_mat.T + t).squeeze()
 
@@ -51,7 +51,7 @@ def visualize_points(model_points, t, rot_mat, label):
 
 def visualize_pointcloud(points, label):
 
-    points = points.cpu().detach().numpy()
+    # points = points.cpu().detach().numpy()
 
     points = points.reshape((-1, 3))
 
@@ -150,6 +150,8 @@ def main():
         refiner.eval()
 
     dists = []
+    success_count = 0
+    total_count = 0
 
     for i, data in enumerate(testdataloader, 0):
         points, choose, img, target, model_points, idx = data
@@ -221,23 +223,28 @@ def main():
         target = target[0].cpu().detach().numpy()
 
         dis = np.mean(np.linalg.norm(pred - target, axis=1))
+        dists.append(dis)
 
-        if dis < 0.005:
-            success_count[idx[0].item()] += 1
+        if dis < 0.002:
+            success_count += 1
             print('No.{0} Pass! Distance: {1}'.format(i, dis))
-            fw.write('No.{0} Pass! Distance: {1}\n'.format(i, dis))
-        else:
-            print('No.{0} NOT Pass! Distance: {1}'.format(i, dis))
-            fw.write('No.{0} NOT Pass! Distance: {1}\n'.format(i, dis))
+            # fw.write('No.{0} Pass! Distance: {1}\n'.format(i, dis))
+        # else:
+            # print('No.{0} NOT Pass! Distance: {1}'.format(i, dis))
+            # fw.write('No.{0} NOT Pass! Distance: {1}\n'.format(i, dis))
+        total_count += 1
 
-        visualize_points(model_points, my_t, my_r, "{0}_pred".format(i))
-        visualize_pointcloud(target, "{0}_target".format(i))
-        visualize_pointcloud(points, "{0}_projected_depth".format(i))
+        # if i < opt.num_visualized:
+        #     visualize_points(model_points, my_t, my_r, "{0}_pred".format(i))
+        #     visualize_pointcloud(target, "{0}_target".format(i))
+        #     visualize_pointcloud(points, "{0}_projected_depth".format(i))
+        #     print("visualizing ", i)
 
-        if i >= opt.num_visualized:
-            print("finished visualizing!")
-            exit()
+        # if i >= opt.num_visualized:
+        #     print("finished visualizing!")
+        #     exit()
 
+    print("success rate: ", success_count/total_count)
     print(np.mean(dists))
 
 
