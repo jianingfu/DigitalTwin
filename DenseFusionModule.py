@@ -1,6 +1,7 @@
 import _init_paths
 import os
 import random
+import copy
 import time
 import numpy as np
 import torch
@@ -18,6 +19,8 @@ from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
 import pytorch_lightning as pl
+import plotly.express as px
+from lib.tools import compute_rotation_matrix_from_ortho6d
 
 
 class DenseFusionModule(pl.LightningModule):
@@ -94,6 +97,11 @@ class DenseFusionModule(pl.LightningModule):
                 pred_r, pred_t = self.refiner(new_points, emb, idx)
                 dis, new_points, new_target = self.criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
 
+        # visualize
+        if (batch_idx == 0 and self.opt.visualize):
+            points = self.get_points(points, idx, model_points, pred_r, pred_t, pred_c, emb, dis, new_points, new_target, target)
+            
+
         self.test_dis += dis.item()
         val_loss = dis.item()
         self.log('val_loss', val_loss)
@@ -105,6 +113,7 @@ class DenseFusionModule(pl.LightningModule):
         if test_dis <= self.best_test:
             self.best_test = test_dis
         print("best_test: ", self.best_test) 
+
 
         if self.best_test < self.opt.decay_margin and not self.opt.decay_start:
             self.opt.decay_start = True
@@ -150,3 +159,72 @@ class DenseFusionModule(pl.LightningModule):
             optimizer = optim.Adam(self.estimator.parameters(), lr=self.opt.lr)
         
         return optimizer
+
+    def get_points(self, idx, model_points, points, pred_r, pred_t, pred_c, emb, dis, new_points, new_target, target):
+        bs, num_p, _ = pred_c.shape
+        pred_c = pred_c.view(bs, num_p)
+        how_max, which_max = torch.max(pred_c, 1)
+        pred_t = pred_t.view(bs * num_p, 1, 3)
+
+        my_r = pred_r[0][which_max[0]].view(-1).unsqueeze(0).unsqueeze(0)
+
+        my_rot_mat = compute_rotation_matrix_from_ortho6d(my_r)[0].cpu().data.numpy()
+
+        #print('my rot mat', my_rot_mat)
+
+        my_t = (points.view(bs * num_p, 1, 3) + pred_t)[which_max[0]].view(-1).cpu().data.numpy()
+
+        if self.opt.refine_model != "":
+            for ite in range(0, self.opt.iteration):
+                T = Variable(torch.from_numpy(my_t.astype(np.float32))).cuda().view(1, 3).repeat(num_p, 1).contiguous().view(1, num_p, 3)
+                rot_mat = my_rot_mat
+
+                #print('iter!', ite, my_rot_mat)
+
+                my_mat = np.zeros((4,4))
+                my_mat[0:3,0:3] = rot_mat
+                my_mat[3, 3] = 1
+
+                #print(my_mat, my_mat.shape)
+
+                R = Variable(torch.from_numpy(my_mat[:3, :3].astype(np.float32))).cuda().view(1, 3, 3)
+                my_mat[0:3, 3] = my_t
+                
+                new_points = torch.bmm((points - T), R).contiguous()
+                pred_r, pred_t = self.refiner(new_points, emb, idx)
+                pred_r = pred_r.view(1, 1, -1)
+                pred_r = pred_r / (torch.norm(pred_r, dim=2).view(1, 1, 1))
+                my_r_2 = pred_r.view(-1).unsqueeze(0).unsqueeze(0)
+                my_t_2 = pred_t.view(-1).cpu().data.numpy()
+                rot_mat_2 = compute_rotation_matrix_from_ortho6d(my_r_2)[0].cpu().data.numpy()
+
+                my_mat_2 = np.zeros((4, 4))
+                my_mat_2[0:3,0:3] = rot_mat_2
+                my_mat_2[3,3] = 1
+                my_mat_2[0:3, 3] = my_t_2
+
+                my_mat_final = np.dot(my_mat, my_mat_2)
+                my_r_final = copy.deepcopy(my_mat_final)
+                my_rot_mat[0:3,0:3] = my_r_final[0:3,0:3]
+                my_t_final = np.array([my_mat_final[0][3], my_mat_final[1][3], my_mat_final[2][3]])
+
+                #my_pred = np.append(my_r_final, my_t_final)
+                my_t = my_t_final    
+
+        my_r = copy.deepcopy(my_rot_mat)
+
+        model_points = model_points[0].cpu().detach().numpy()
+
+        # my_r = quaternion_matrix(my_r)[:3, :3]
+        pred = np.dot(model_points, my_r.T) + my_t
+        target = target[0].cpu().detach().numpy()
+
+        dis = np.mean(np.linalg.norm(pred - target, axis=1))
+
+        pred_pts = (model_points @ my_r.T + my_t).squeeze()
+
+        target_pts = target.reshape((-1, 3))
+
+        depth_pts = points.reshape((-1, 3))
+
+        # px.scatter_3d(pred_pts)

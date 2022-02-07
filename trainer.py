@@ -25,6 +25,7 @@ parser.add_argument('--nepoch', type=int, default=500, help='max number of epoch
 parser.add_argument('--resume_posenet', type=str, default = 'ckpt/last.ckpt',  help='resume PoseNet model')
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
+parser.add_argument('--visualize', type=bool, default = True, help='visualize using plotly')
 opt = parser.parse_args()
 
 # :)
