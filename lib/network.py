@@ -118,6 +118,7 @@ class PoseNet(nn.Module):
         self.conv4_t = torch.nn.Conv1d(128, num_obj*3, 1) #translation
         self.conv4_c = torch.nn.Conv1d(128, num_obj*1, 1) #confidence
 
+
         self.num_obj = num_obj
         self.num_rot_bins = num_rot_bins
 
@@ -224,9 +225,11 @@ class PoseRefineNet(nn.Module):
         self.conv2_front = torch.nn.Linear(512, 128)
         self.conv2_rot_bins = torch.nn.Linear(512, 128)
         self.conv2_t = torch.nn.Linear(512, 128)
+
         
         self.conv3_front = torch.nn.Linear(128, num_obj*3) #front axes
         self.conv3_rot_bins = torch.nn.Linear(128, num_obj*num_rot_bins) #discretized rotation
+
         self.conv3_t = torch.nn.Linear(128, num_obj*3) #translation
 
         self.num_obj = num_obj

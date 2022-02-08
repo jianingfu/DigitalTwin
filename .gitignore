@@ -8,11 +8,12 @@ lib/knn/knn_pytorch/__pycache__/*
 __init__.*
 *.pth
 YCB_Video_toolbox
-datasets/customCAD/CAD Dataset Generator 2018U/Capture/*
-datasets/customCAD/dataset_processed/*
 .idea
 .vscode
 lightning_logs
+datasets/customCAD/CAD Dataset Generator 2018U/Capture/*
+datasets/customCAD/dataset_processed/*
+datasets/custom/custom_preprocessed
 *.ply
-ckpt/*
-tb_logs/*
+ckpt/
+tb_logs/
