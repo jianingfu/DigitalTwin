@@ -137,7 +137,7 @@ class DenseFusionModule(pl.LightningModule):
         if self.best_test < self.opt.refine_margin and not self.opt.refine_start:
             print('======Refine started!========')
             self.opt.refine_start = True
-            self.opt.batch_size = int(self.opt.batch_size / self.opt.iteration)
+            # self.opt.batch_size = int(self.opt.batch_size / self.opt.iteration)
             self.trainer.optimizers[0] = optim.Adam(self.refiner.parameters(), lr=self.opt.lr)
 
             # re-setup dataset, TODO: double check/test this

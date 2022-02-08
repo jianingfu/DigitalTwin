@@ -1,3 +1,4 @@
+import random
 import torch
 import os
 from YCBDataModule import YCBDataModule
@@ -31,12 +32,17 @@ parser.add_argument('--profile', action="store_true", default=False, help='shoul
 opt = parser.parse_args()
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
+
+opt.manualSeed = random.randint(1, 10000)
+random.seed(opt.manualSeed)
+torch.manual_seed(opt.manualSeed)
+
 # :)
 opt.refine_start = False
 
 if opt.dataset == 'ycb':
     opt.num_objects = 21 #number of object classes in the dataset
-    opt.num_points = 1000 #number of points on the input pointcloud
+    opt.num_points = 500 #number of points on the input pointcloud
     opt.outf = 'trained_models/ycb' #folder to save trained models
     opt.log_dir = 'tb_logs/dense_fusion' #folder to save logs
     opt.repeat_epoch = 1 #number of repeat times for one epoch training

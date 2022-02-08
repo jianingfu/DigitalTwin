@@ -13,3 +13,6 @@ datasets/customCAD/dataset_processed/*
 .idea
 .vscode
 lightning_logs
+*.ply
+ckpt/*
+tb_logs/*

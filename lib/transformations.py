@@ -1932,6 +1932,51 @@ def rotation_matrix_from_vectors_procedure(vec1, vec2):
 
     return rot_2xy_to_2 @ rot_1xy_to_2xy @ rot_1_to_1xy
 
+#bs * 3
+def rotation_matrix_from_vectors_batch(vec1s, vec2s):
+    a = (vec1s / numpy.expand_dims(numpy.linalg.norm(vec1s, axis=1), -1)).reshape(-1, 3)
+    b = (vec2s / numpy.expand_dims(numpy.linalg.norm(vec2s, axis=1), -1)).reshape(-1, 3)
+
+    v = numpy.cross(a, b)
+    c = numpy.sum(a*b, axis=1)
+    s = numpy.linalg.norm(v, axis=1)
+
+    row1 = numpy.expand_dims(numpy.vstack((numpy.zeros_like(v[:,2]), -v[:,2], v[:,1])).transpose(), 1)
+    row2 = numpy.expand_dims(numpy.vstack((v[:,2], numpy.zeros_like(v[:,2]), -v[:,0])).transpose(), 1)
+    row3 = numpy.expand_dims(numpy.vstack((-v[:,1], v[:,0], numpy.zeros_like(v[:,0]))).transpose(), 1)
+
+    kmat = numpy.concatenate((row1, row2, row3), axis=1)
+    
+    rotation_matrix = numpy.tile(numpy.expand_dims(numpy.eye(3), axis=0), (a.shape[0], 1, 1))
+
+    #rotation_matrix = numpy.eye(3) + kmat + kmat.dot(kmat) * ((1 - c) / (s ** 2))
+
+    non_i_rows = s > 0
+
+    coeffs = numpy.expand_dims(numpy.expand_dims(((1 - c[non_i_rows]) / (numpy.square(s[non_i_rows]))), axis=-1), axis=-1)
+
+    rotation_matrix[non_i_rows] = rotation_matrix[non_i_rows] + kmat[non_i_rows] + numpy.matmul(kmat[non_i_rows], kmat[non_i_rows]) * coeffs
+
+    return rotation_matrix
+
+#bs * 3
+def rotation_matrix_from_vectors_procedure_batch(vec1s, vec2s):
+
+    vec1s_xy = numpy.copy(vec1s)
+    vec1s_xy[:,2] = 0
+
+    vec2s_xy = numpy.copy(vec2s)
+    vec2s_xy[:,2] = 0
+
+    vec1s_xy[numpy.linalg.norm(vec1s_xy, axis=1) == 0] = numpy.array([1, 0, 0])
+    vec2s_xy[numpy.linalg.norm(vec2s_xy, axis=1) == 0] = numpy.array([1, 0, 0])
+
+    rot_1s_to_1xys = rotation_matrix_from_vectors_batch(vec1s, vec1s_xy)
+    rot_1xys_to_2xys = rotation_matrix_from_vectors_batch(vec1s_xy, vec2s_xy)
+    rot_2xys_to_2s = rotation_matrix_from_vectors_batch(vec2s_xy, vec2s)
+
+    return numpy.matmul(rot_2xys_to_2s, numpy.matmul(rot_1xys_to_2xys, rot_1s_to_1xys))
+
 
 def axis_angle_of_rotation_matrix(rot_mat):
     assert(rot_mat.shape == (3, 3))
@@ -1947,6 +1992,16 @@ def axis_angle_of_rotation_matrix(rot_mat):
     return axis, angle
 
 def rotation_matrix_of_axis_angle(axis, theta):
+    """
+    Return the rotation matrix associated with counterclockwise rotation about
+    the given axis by theta radians.
+    """
+
+    r = R.from_rotvec(axis * theta)
+
+    return r.as_matrix()
+
+def rotation_matrix_of_axis_angle_batch(axis, theta):
     """
     Return the rotation matrix associated with counterclockwise rotation about
     the given axis by theta radians.
