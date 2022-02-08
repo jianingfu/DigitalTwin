@@ -98,6 +98,7 @@ class PoseNet(nn.Module):
         self.cnn = ModifiedResnet()
         self.feat = PoseNetFeat(num_points)
         
+
         self.conv1_front = torch.nn.Conv1d(1408, 1280, 1)
         self.conv1_rot_bins = torch.nn.Conv1d(1408, 1280, 1)
         self.conv1_t = torch.nn.Conv1d(1408, 1280, 1)
@@ -122,6 +123,7 @@ class PoseNet(nn.Module):
         self.conv5_rot_bins = torch.nn.Conv1d(128, num_obj*num_rot_bins, 1) #rotation bins around front axis #3780
         self.conv5_t = torch.nn.Conv1d(128, num_obj*3, 1) #translation #63
         self.conv5_c = torch.nn.Conv1d(128, num_obj*1, 1) #confidence #21
+
 
         self.num_obj = num_obj
         self.num_rot_bins = num_rot_bins
@@ -156,6 +158,7 @@ class PoseNet(nn.Module):
         tx = F.relu(self.conv3_t(tx))
         cx = F.relu(self.conv3_c(cx))
 
+
         fx = F.relu(self.conv4_front(fx))
         rx = F.relu(self.conv4_rot_bins(rx))
         tx = F.relu(self.conv4_t(tx))
@@ -165,6 +168,7 @@ class PoseNet(nn.Module):
         rx = self.conv5_rot_bins(rx).view(bs, self.num_obj, self.num_rot_bins, self.num_points)
         tx = self.conv5_t(tx).view(bs, self.num_obj, 3, self.num_points)
         cx = torch.sigmoid(self.conv5_c(cx)).view(bs, self.num_obj, 1, self.num_points)
+
         
         b = 0
         out_fx = torch.index_select(fx[b], 0, obj[b])
@@ -228,9 +232,11 @@ class PoseRefineNet(nn.Module):
         self.conv2_front = torch.nn.Linear(512, 128)
         self.conv2_rot_bins = torch.nn.Linear(512, 128)
         self.conv2_t = torch.nn.Linear(512, 128)
+
         
         self.conv3_front = torch.nn.Linear(128, num_obj*3) #front axes
         self.conv3_rot_bins = torch.nn.Linear(128, num_obj*num_rot_bins) #discretized rotation
+
         self.conv3_t = torch.nn.Linear(128, num_obj*3) #translation
 
         self.num_obj = num_obj
@@ -252,11 +258,13 @@ class PoseRefineNet(nn.Module):
 
         fx = self.conv3_front(fx).view(bs, self.num_obj, 3)
         rx = self.conv3_rot_bins(rx).view(bs, self.num_obj, self.num_rot_bins)
+
         tx = self.conv3_t(tx).view(bs, self.num_obj, 3)
 
         b = 0
         out_fx = torch.index_select(fx[b], 0, obj[b])
         out_rx = torch.index_select(rx[b], 0, obj[b])
         out_tx = torch.index_select(tx[b], 0, obj[b])
+
 
         return out_fx, out_rx, out_tx

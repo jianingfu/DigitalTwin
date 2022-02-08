@@ -15,6 +15,7 @@ rot_bins_loss_coeff = 1
 front_loss_coeff = 1
 translation_loss_coeff = 4
 
+
 def loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, points, num_rot_bins):
     
     pred_front = pred_front.view((1, 1, 3))
@@ -96,3 +97,4 @@ class Loss_refine(_Loss):
 
     def forward(self, pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, points):
         return loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, points, self.num_rot_bins)
+

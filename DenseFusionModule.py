@@ -1,6 +1,7 @@
 import _init_paths
 import os
 import random
+import copy
 import time
 import numpy as np
 import torch
@@ -18,6 +19,8 @@ from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
 import pytorch_lightning as pl
+import plotly.express as px
+from lib.tools import compute_rotation_matrix_from_ortho6d
 from datetime import datetime
 
 
@@ -107,6 +110,13 @@ class DenseFusionModule(pl.LightningModule):
                 pred_front, pred_rot_bins, pred_t = self.refiner(new_points, emb, idx)
                 loss, new_points, new_rot_bins, new_t = self.criterion_refine(pred_front, pred_rot_bins, 
                             pred_t, front_r, new_rot_bins, front_orig, new_t, idx, new_points)
+        
+        
+        # visualize TODO: check pred_r
+        if (batch_idx == 0 and self.opt.visualize):
+            points = self.get_points(points, idx, model_points, pred_r, pred_t, pred_c, emb, dis, new_points, new_target, target)
+            
+            
         self.test_loss += loss.item()
         val_loss = loss.item()
         self.log('val_loss', val_loss, logger=True)
@@ -128,6 +138,7 @@ class DenseFusionModule(pl.LightningModule):
                 torch.save(self.estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(self.opt.outf, self.current_epoch, test_loss))
         print("best_test: ", self.best_test) 
 
+
         if self.best_test < self.opt.decay_margin and not self.opt.decay_start:
             self.opt.decay_start = True
             self.opt.lr *= self.opt.lr_rate
@@ -142,16 +153,23 @@ class DenseFusionModule(pl.LightningModule):
 
             # re-setup dataset, TODO: double check/test this
             self.trainer.datamodule.setup(None)
-            self.trainer.datamodule.train_dataloader = self.trainer.datamodule.train_dataloader()
-            self.trainer.datamodule.val_dataloader = self.trainer.datamodule.val_dataloader()
+            self.opt.sym_list = self.trainer.datamodule.sym_list
+            self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
+            self.criterion = Loss(self.opt.num_points_mesh, self.opt.sym_list)
+            self.criterion_refine = Loss_refine(self.opt.num_points_mesh, self.opt.sym_list)
+            print("start reloading data")
+            self.trainer.datamodule.train_dataloader()
+            self.trainer.datamodule.val_dataloader()
             
 
     def configure_optimizers(self):
-        if self.opt.resume_posenet != '':
-            self.estimator.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_posenet)))
+        # if self.opt.resume_posenet != '':
+            # self.estimator.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_posenet)))
+            # self.estimator.load_state_dict(torch.load(self.opt.resume_posenet))
 
         if self.opt.resume_refinenet != '':
-            self.refiner.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_refinenet)))
+            # self.refiner.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_refinenet)))
+            self.refiner.load_state_dict(torch.load(self.opt.resume_refinenet))
             self.opt.refine_start = True
             self.opt.decay_start = True
             self.opt.lr *= self.opt.lr_rate
@@ -164,3 +182,72 @@ class DenseFusionModule(pl.LightningModule):
             optimizer = optim.Adam(self.estimator.parameters(), lr=self.opt.lr)
         
         return optimizer
+
+    def get_points(self, idx, model_points, points, pred_r, pred_t, pred_c, emb, dis, new_points, new_target, target):
+        bs, num_p, _ = pred_c.shape
+        pred_c = pred_c.view(bs, num_p)
+        how_max, which_max = torch.max(pred_c, 1)
+        pred_t = pred_t.view(bs * num_p, 1, 3)
+
+        my_r = pred_r[0][which_max[0]].view(-1).unsqueeze(0).unsqueeze(0)
+
+        my_rot_mat = compute_rotation_matrix_from_ortho6d(my_r)[0].cpu().data.numpy()
+
+        #print('my rot mat', my_rot_mat)
+
+        my_t = (points.view(bs * num_p, 1, 3) + pred_t)[which_max[0]].view(-1).cpu().data.numpy()
+
+        if self.opt.refine_model != "":
+            for ite in range(0, self.opt.iteration):
+                T = Variable(torch.from_numpy(my_t.astype(np.float32))).cuda().view(1, 3).repeat(num_p, 1).contiguous().view(1, num_p, 3)
+                rot_mat = my_rot_mat
+
+                #print('iter!', ite, my_rot_mat)
+
+                my_mat = np.zeros((4,4))
+                my_mat[0:3,0:3] = rot_mat
+                my_mat[3, 3] = 1
+
+                #print(my_mat, my_mat.shape)
+
+                R = Variable(torch.from_numpy(my_mat[:3, :3].astype(np.float32))).cuda().view(1, 3, 3)
+                my_mat[0:3, 3] = my_t
+                
+                new_points = torch.bmm((points - T), R).contiguous()
+                pred_r, pred_t = self.refiner(new_points, emb, idx)
+                pred_r = pred_r.view(1, 1, -1)
+                pred_r = pred_r / (torch.norm(pred_r, dim=2).view(1, 1, 1))
+                my_r_2 = pred_r.view(-1).unsqueeze(0).unsqueeze(0)
+                my_t_2 = pred_t.view(-1).cpu().data.numpy()
+                rot_mat_2 = compute_rotation_matrix_from_ortho6d(my_r_2)[0].cpu().data.numpy()
+
+                my_mat_2 = np.zeros((4, 4))
+                my_mat_2[0:3,0:3] = rot_mat_2
+                my_mat_2[3,3] = 1
+                my_mat_2[0:3, 3] = my_t_2
+
+                my_mat_final = np.dot(my_mat, my_mat_2)
+                my_r_final = copy.deepcopy(my_mat_final)
+                my_rot_mat[0:3,0:3] = my_r_final[0:3,0:3]
+                my_t_final = np.array([my_mat_final[0][3], my_mat_final[1][3], my_mat_final[2][3]])
+
+                #my_pred = np.append(my_r_final, my_t_final)
+                my_t = my_t_final    
+
+        my_r = copy.deepcopy(my_rot_mat)
+
+        model_points = model_points[0].cpu().detach().numpy()
+
+        # my_r = quaternion_matrix(my_r)[:3, :3]
+        pred = np.dot(model_points, my_r.T) + my_t
+        target = target[0].cpu().detach().numpy()
+
+        dis = np.mean(np.linalg.norm(pred - target, axis=1))
+
+        pred_pts = (model_points @ my_r.T + my_t).squeeze()
+
+        target_pts = target.reshape((-1, 3))
+
+        depth_pts = points.reshape((-1, 3))
+
+        # px.scatter_3d(pred_pts)

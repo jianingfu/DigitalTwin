@@ -21,14 +21,17 @@ def loss_calculation(pred_front, pred_rot_bins, pred_t, pred_c, front_r, rot_bin
     
     front_r = front_r.view(bs, 1, 3).repeat(1, bs*num_p, 1)
 
+
     pred_rot_bins = pred_rot_bins.view(bs*num_p, num_rot_bins)
     rot_bins = rot_bins.repeat(bs*num_p, 1)
 
     #pred_front loss (L2 norm on front vector)
     pred_front_dis = torch.norm((pred_front - front_r), dim=2)
 
+
     #pred_rot loss (cross entropy on bins)
     pred_rot_loss = cross_entropy_loss(pred_rot_bins, rot_bins).unsqueeze(0).unsqueeze(-1)
+
 
     t = t.repeat(1, bs*num_p, 1)
 
@@ -97,5 +100,6 @@ class Loss(_Loss):
         self.num_rot_bins = num_rot_bins
 
     def forward(self, pred_front, pred_rot_bins, pred_t, pred_c, front_r, rot_bins, front_orig, t, idx, model_points, points, w, refine):
+
 
         return loss_calculation(pred_front, pred_rot_bins, pred_t, pred_c, front_r, rot_bins, front_orig, t, idx, model_points, points, w, refine, self.num_rot_bins)
