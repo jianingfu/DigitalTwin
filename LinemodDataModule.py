@@ -20,9 +20,9 @@ class LinemodDataModule(pl.LightningDataModule):
         # make assignments here (val/train/test split)
         # called on every process in DDP
         self.train_dataset = PoseDataset_linemod('train', self.opt.num_points, True, self.opt.dataset_root, 
-                                    self.opt.noise_trans, self.opt.refine_start, num_rot_bins = self.opt.num_rot_bins, perform_profiling=self.opt.profile)
+                                    self.opt.noise_trans, num_rot_bins = self.opt.num_rot_bins, perform_profiling=self.opt.profile)
         self.test_dataset = PoseDataset_linemod('test', self.opt.num_points, False, self.opt.dataset_root, 
-                                    0.0, self.opt.refine_start, num_rot_bins = self.opt.num_rot_bins, perform_profiling=self.opt.profile)
+                                    0.0, num_rot_bins = self.opt.num_rot_bins, perform_profiling=self.opt.profile)
         self.sym_list = self.train_dataset.get_sym_list()
         self.num_points_mesh = self.train_dataset.get_num_points_mesh()
 

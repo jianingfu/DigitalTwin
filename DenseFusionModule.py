@@ -14,15 +14,14 @@ import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.autograd import Variable
-from lib.network import PoseNet, PoseRefineNet
+from lib.network import PoseNet
 from lib.loss import Loss
-from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
 import pytorch_lightning as pl
-import plotly.express as px
 from datetime import datetime
 from tensorboard.plugins.mesh import summary as mesh_summary
-from lib.transformations import rotation_matrix_from_vectors_procedure, rotation_matrix_of_axis_angle
+from lib.transformations import rotation_matrix_of_axis_angle, \
+        rotation_matrix_from_vectors_procedure
 
 
 class DenseFusionModule(pl.LightningModule):
@@ -35,60 +34,25 @@ class DenseFusionModule(pl.LightningModule):
         torch.manual_seed(self.opt.manualSeed)
 
         self.estimator = PoseNet(num_points = self.opt.num_points, num_obj = self.opt.num_objects, num_rot_bins = self.opt.num_rot_bins)
-        self.refiner = PoseRefineNet(num_points = self.opt.num_points, num_obj = self.opt.num_objects, num_rot_bins = self.opt.num_rot_bins)
-        # if self.opt.start_epoch == 1:
-        #     if os.path.isdir(self.opt.log_dir):
-        #         for log in os.listdir(self.opt.log_dir):
-        #             os.remove(os.path.join(self.opt.log_dir, log))
+
         self.best_test = np.Inf
         self.criterion = Loss(self.opt.num_rot_bins)
-        self.criterion_refine = Loss_refine(self.opt.num_rot_bins)
 
-    def on_train_epoch_start(self):
-        # TODO: do we need this?
-        if self.opt.refine_start:
-            self.estimator.eval()
-            self.refiner.train()
-        else:
-            self.estimator.train()
-    
-    # TODO: check refine
-    def backward(self, loss, optimizer, optimizer_idx):
-        if not self.opt.refine_start:
-            loss.backward()
 
     def training_step(self, batch, batch_idx):
-        if self.opt.profile:
-                    print("starting training sample {0} {1}".format(batch_idx, datetime.now()))
         # training_step defined the train loop.
         points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = batch
 
         pred_front, pred_rot_bins, pred_t, pred_c, emb = self.estimator(img, points, choose, idx)
 
         # torch.cuda.empty_cache()
-        if self.opt.profile:
-            print("finished forward pass {0} {1}".format(batch_idx, datetime.now()))
 
-        loss, new_points, new_rot_bins, new_t, new_front_orig, new_front_r = self.criterion(pred_front, 
+        loss, new_points, new_rot_bins, new_t, new_front_r = self.criterion(pred_front, 
                         pred_rot_bins, pred_t, pred_c, front_r, rot_bins, front_orig, t, idx, 
-                        model_points, points, self.opt.w, self.opt.refine_start)
-
-
-        if self.opt.profile:
-            print("finished loss {0} {1}".format(batch_idx, datetime.now()))
-        
-        if self.opt.refine_start:
-            for ite in range(0, self.opt.iteration):
-                pred_front, pred_rot_bins, pred_t = self.refiner(new_points, emb, idx)
-                loss, new_points, new_rot_bins, new_t, new_front_orig, new_front_r = \
-                    self.criterion_refine(pred_front, pred_rot_bins, pred_t, new_front_r, 
-                    new_rot_bins, new_front_orig, new_t, idx, new_points)
-                loss.backward()
+                        model_points, points, self.opt.w)
 
         # self.log_dict({'train_dis':dis, 'loss': loss}, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        if self.opt.profile:
-                    print("finished training sample {0} {1}".format(batch_idx, datetime.now()))
         return loss
 
     def on_validation_epoch_start(self):
@@ -98,26 +62,29 @@ class DenseFusionModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = batch
         pred_front, pred_rot_bins, pred_t, pred_c, emb = self.estimator(img, points, choose, idx)
-        loss, new_points, new_rot_bins, new_t, new_front_orig, new_front_r = self.criterion(pred_front, 
-                pred_rot_bins, pred_t, pred_c, front_r, rot_bins, front_orig, t, idx, 
-                model_points, points, self.opt.w, self.opt.refine_start)
 
-        if self.opt.refine_start:
-            for ite in range(0, self.opt.iteration):
-                pred_front, pred_rot_bins, pred_t = self.refiner(new_points, emb, idx)
-                loss, new_points, new_rot_bins, new_t, new_front_orig, new_front_r = \
-                    self.criterion_refine(pred_front, pred_rot_bins, pred_t, new_front_r, 
-                                        new_rot_bins, new_front_orig, new_t, idx, new_points)       
+        loss, new_points, new_rot_bins, new_t, new_front_r = self.criterion(pred_front, pred_rot_bins, pred_t, pred_c, front_r, rot_bins, front_orig, t, idx, model_points, points, self.opt.w)
+
+        # if self.opt.refine_start:
+        #     for ite in range(0, self.opt.iteration):
+        #         pred_front, pred_rot_bins, pred_t = self.refiner(new_points, emb, idx)
+        #         loss, new_points, new_rot_bins, new_t, new_front_orig, new_front_r = \
+        #             self.criterion_refine(pred_front, pred_rot_bins, pred_t, new_front_r, 
+        #                                 new_rot_bins, new_front_orig, new_t, idx, new_points)       
         
-        # visualize TODO: check pred_r
+        # visualize
         if (batch_idx == 0 and self.opt.visualize):
-            gt_front_vis, pred_fronts_estimator_vis, selected_pred_front_vis, gt_vis, \
-                pred_vis, projected_depth_vi = self.get_vis_points(points, idx, model_points, 
-                        pred_front, pred_rot_bins, pred_t, pred_c, emb, front_r, rot_bins, front_orig, 
-                        t, new_points)
+            gt_vis, pred_vis = self.get_vis_points(model_points[0], points[0], pred_front[0], pred_rot_bins[0], pred_t[0], pred_c[0], 
+                    emb[0], front_r[0], rot_bins[0], front_orig[0], t[0], new_points[0], new_t[0], new_front_r[0])
 
-            summary = mesh_summary.op('point_cloud', vertices=gt_vis)
-            self.logger.experiment.add_mesh(summary)    
+            vis = np.concatenate((gt_vis, pred_vis), axis = 1)
+            gt_color = np.zeros((gt_vis.shape))
+            gt_color[:,:,0] = 200
+            pred_color = np.zeros((pred_vis.shape))
+            pred_color[:,:,1] = 200
+            colors = np.concatenate((gt_color, pred_color), axis = 1)
+            # summary = mesh_summary.op('point_cloud', vertices=gt_vis)
+            self.logger.experiment.add_mesh('comb_vis', vertices=vis, colors= colors)    
 
         self.test_loss += loss.item()
         val_loss = loss.item()
@@ -129,69 +96,36 @@ class DenseFusionModule(pl.LightningModule):
         test_loss = np.average(np.array(outputs))
         if test_loss <= self.best_test:
             self.best_test = test_loss
-            if self.opt.refine_start:
-                torch.save(self.refiner.state_dict(), '{0}/pose_refine_model_{1}_{2}.pth'.format(self.opt.outf, self.current_epoch, test_loss))
-            else:
-                torch.save(self.estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(self.opt.outf, self.current_epoch, test_loss))
+            torch.save(self.estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(self.opt.outf, self.current_epoch, test_loss))
         print("best_test: ", self.best_test) 
 
 
-        if self.best_test < self.opt.decay_margin and not self.opt.decay_start:
-            self.opt.decay_start = True
-            self.opt.lr *= self.opt.lr_rate
-            self.opt.w *= self.opt.w_rate
-            self.trainer.optimizers[0] = optim.Adam(self.estimator.parameters(), lr=self.opt.lr)
-
-        if self.best_test < self.opt.refine_margin and not self.opt.refine_start:
-            print('======Refine started!========')
-            self.opt.refine_start = True
-            # self.opt.batch_size = int(self.opt.batch_size / self.opt.iteration)
-            self.trainer.optimizers[0] = optim.Adam(self.refiner.parameters(), lr=self.opt.lr)
-
-            # re-setup dataset, TODO: double check/test this
-            self.trainer.datamodule.setup(None)
-            self.opt.sym_list = self.trainer.datamodule.sym_list
-            self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
-            self.criterion = Loss(self.opt.num_points_mesh, self.opt.sym_list)
-            self.criterion_refine = Loss_refine(self.opt.num_points_mesh, self.opt.sym_list)
-            print("start reloading data")
-            self.trainer.datamodule.train_dataloader()
-            self.trainer.datamodule.val_dataloader()
-            
-
     def configure_optimizers(self):
-        # if self.opt.resume_posenet != '':
-            # self.estimator.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_posenet)))
-            # self.estimator.load_state_dict(torch.load(self.opt.resume_posenet))
-
-        if self.opt.resume_refinenet != '':
-            # self.refiner.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_refinenet)))
-            self.refiner.load_state_dict(torch.load(self.opt.resume_refinenet))
-            self.opt.refine_start = True
-            self.opt.decay_start = True
-            self.opt.lr *= self.opt.lr_rate
-            self.opt.w *= self.opt.w_rate
-            self.opt.batch_size = int(self.opt.batch_size / self.opt.iteration)
-            optimizer = optim.Adam(self.refiner.parameters(), lr=self.opt.lr)
-        else:
-            self.opt.refine_start = False
-            self.opt.decay_start = False
-            optimizer = optim.Adam(self.estimator.parameters(), lr=self.opt.lr)
+        optimizer = optim.Adam(self.estimator.parameters(), lr=self.opt.lr)
         
         return optimizer
 
-    def get_vis_points(self, idx, model_points, points, pred_front, pred_rot_bins, pred_t, pred_c, 
-                    emb, front_r, rot_bins, front_orig, t, new_points):
+    def get_vis_points(self, model_points, points, pred_front, pred_rot_bins, pred_t, pred_c, 
+                    emb, front_r, rot_bins, front_orig, t, new_points, new_t, new_front_r):
          #immediately shift pred_front to model coordinates
-        pred_front = pred_front - (pred_t + points)
+        pred_front = pred_front - pred_t
 
-        bs, num_p, _ = pred_c.shape
+        num_p, _ = pred_c.shape
+        bs = 1 # just visualizting the first one
 
         pred_c = pred_c.view(bs, num_p)
         how_max, which_max = torch.max(pred_c, 1)
 
+        pred_t_points_vis = self.visualize_pointcloud(pred_t + points)
+
+        gt_t_vis = self.visualize_pointcloud(t)
+        pred_t_vis = self.visualize_pointcloud(t- new_t)
+
         gt_front_vis = self.visualize_fronts(front_r, t)
         pred_fronts_estimator_vis = self.visualize_fronts(pred_front, pred_t + points)
+
+        new_points_vis = self.visualize_pointcloud(new_points)
+        new_gt_front = self.visualize_fronts(new_front_r, new_t)
 
         #which_max -> bs
         #pred_t -> bs * num_p * 3
@@ -200,13 +134,20 @@ class DenseFusionModule(pl.LightningModule):
         which_max_3 = which_max.view(bs, 1, 1).repeat(1, 1, 3)
         which_max_rot_bins = which_max.view(bs, 1, 1).repeat(1, 1, self.opt.num_rot_bins)
 
+        # delete these for bs > 1
+        which_max_3 = which_max_3[0]
+        which_max_rot_bins = which_max_rot_bins[0]
+
         #best_c_pred_t -> bs * 1 * 3
-        best_c_pred_t = torch.gather(pred_t, 1, which_max_3) + torch.gather(points, 1, which_max_3)
+        best_c_pred_t = pred_t[which_max] + points[which_max]
+        # best_c_pred_t = torch.gather(pred_t, 1, which_max_3) + torch.gather(points, 1, which_max_3)
 
         #we need to calculate the actual transformation that our rotation rep. represents
 
-        best_c_pred_front = torch.gather(pred_front, 1, which_max_3).squeeze(1)
-        best_c_rot_bins = torch.gather(pred_rot_bins, 1, which_max_rot_bins).squeeze(1)
+        best_c_pred_front = pred_front[which_max].squeeze(1)
+        best_c_rot_bins = pred_rot_bins[which_max].squeeze(1)
+        # best_c_pred_front = torch.gather(pred_front, 1, which_max_3).squeeze(1)
+        # best_c_rot_bins = torch.gather(pred_rot_bins, 1, which_max_rot_bins).squeeze(1)
 
         #get the angle in radians based on highest histogram bin
         #angle -> bs * 1
@@ -219,23 +160,6 @@ class DenseFusionModule(pl.LightningModule):
         gt_front = front_r.squeeze()
         gt_theta = torch.argmax(rot_bins) / self.opt.num_rot_bins * 2 * np.pi
         gt_t = t.squeeze()
-
-        if self.opt.refine_model != "":
-            for ite in range(0, self.opt.iteration):
-                pred_front, pred_rot_bins, pred_t = self.refiner(new_points, emb, idx)
-
-                #shift to model_coordinates
-                pred_front = pred_front - pred_t
-
-                my_front += pred_front.squeeze()
-
-                best_c_rot_bins = pred_rot_bins.squeeze(1)
-                angle = (torch.argmax(best_c_rot_bins, axis=1) / best_c_rot_bins.shape[1] * 2 * np.pi)
-                my_theta += angle.squeeze()
-
-                my_t += pred_t.squeeze()
-
-                loss, new_points, new_rot_bins, new_t, new_front_orig, new_front_r = self.criterion_refine(pred_front, pred_rot_bins, pred_t, new_front_r, new_rot_bins, new_front_orig, new_t, idx, new_points)
 
 
         selected_pred_front_vis = self.visualize_fronts(my_front, my_t)
@@ -250,10 +174,9 @@ class DenseFusionModule(pl.LightningModule):
         pred_vis = self.visualize_points(model_points, front_orig, my_front, my_theta, my_t)
         projected_depth_vis = self.visualize_pointcloud(points)
 
-        return [gt_front_vis, pred_fronts_estimator_vis, selected_pred_front_vis, 
-                gt_vis, pred_vis, projected_depth_vis]
+        return gt_vis, pred_vis
 
-    def visualize_fronts(fronts, t):
+    def visualize_fronts(self, fronts, t):
         fronts = fronts.cpu().detach().numpy()
         fronts = fronts.reshape((-1, 3))
 
@@ -261,9 +184,10 @@ class DenseFusionModule(pl.LightningModule):
         t = t.reshape((-1, 3))
 
         front_points = fronts + t
+        front_points = torch.tensor(front_points[None,:])
         return front_points
 
-    def visualize_points(model_points, front_orig, front, angle, t):
+    def visualize_points(self, model_points, front_orig, front, angle, t):
 
         model_points = model_points.cpu().detach().numpy()
         front_orig = front_orig.cpu().detach().numpy().squeeze()
@@ -278,11 +202,13 @@ class DenseFusionModule(pl.LightningModule):
         R_tot = (R_axis @ Rf)
 
         pts = (model_points @ R_tot.T + t).squeeze()
+        pts = torch.tensor(pts[None,:])
         return pts
 
-    def visualize_pointcloud(points):
+    def visualize_pointcloud(self, points):
 
         points = points.cpu().detach().numpy()
 
         points = points.reshape((-1, 3))
+        points = torch.tensor(points[None,:])
         return points

@@ -11,27 +11,25 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default = 'custom', help='ycb or linemod')
+parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
 parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
 parser.add_argument('--batch_size', type=int, default = 8, help='batch size')
 parser.add_argument('--workers', type=int, default = 10, help='number of data loading workers')
 parser.add_argument('--lr', default=0.0001, help='learning rate')
 parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
-parser.add_argument('--w', default=0.05, help='pred_c regularization')
+parser.add_argument('--w', default=0.025, help='pred_c regularization')
 parser.add_argument('--w_rate', default=0.3, help='pred_c regularization decay rate')
 parser.add_argument('--decay_margin', default=0.016, help='margin to decay lr & w')
 parser.add_argument('--refine_margin', default=0.1, help='margin to start the training of iterative refinement')
 parser.add_argument('--noise_trans', default=0.03, help='range of the random noise of translation added to the training data')
-parser.add_argument('--iteration', type=int, default = 2, help='number of refinement iterations')
 parser.add_argument('--nepoch', type=int, default=500, help='max number of epochs to train')
-parser.add_argument('--resume_posenet', type=str, default = 'ckpt/last.ckpt',  help='resume PoseNet model')
-parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
+parser.add_argument('--resume_posenet', type=str, default = '',  help='resume PoseNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
 parser.add_argument('--visualize', type=bool, default = True, help='visualize using plotly')
 parser.add_argument('--image_size', type=int, default=300, help="square side length of cropped image")
 parser.add_argument('--num_rot_bins', type=int, default = 18, help='number of bins discretizing the rotation around front')
+parser.add_argument('--skip_testing', action="store_true", default=False, help='skip testing section of each epoch')
 # TODO: lightning has a built in performance profile, set that up!
-parser.add_argument('--profile', action="store_true", default=False, help='should we performance profile?')
 
 opt = parser.parse_args()
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
@@ -89,8 +87,6 @@ if __name__ == '__main__':
                             every_n_epochs=1)
 
     logger = TensorBoardLogger("tb_logs", name="dense_fusion")
-    # most basic trainer, uses good defaults (auto-tensorboard, checkpoints, logs, and more)
-    # trainer = pl.Trainer(gpus=8) (if you have GPUs)
     trainer = pl.Trainer(logger=logger, accumulate_grad_batches=opt.batch_size, 
                             callbacks=[checkpoint_callback],
                             max_epochs=opt.nepoch - opt.start_epoch,

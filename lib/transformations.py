@@ -1997,6 +1997,8 @@ def rotation_matrix_of_axis_angle(axis, theta):
     the given axis by theta radians.
     """
 
+    axis /= numpy.linalg.norm(axis)
+
     r = R.from_rotvec(axis * theta)
 
     return r.as_matrix()
@@ -2006,6 +2008,8 @@ def rotation_matrix_of_axis_angle_batch(axis, theta):
     Return the rotation matrix associated with counterclockwise rotation about
     the given axis by theta radians.
     """
+    
+    axis /= numpy.expand_dims(numpy.linalg.norm(axis, axis=1), -1)
 
     r = R.from_rotvec(axis * theta)
 
