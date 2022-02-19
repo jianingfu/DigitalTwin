@@ -76,10 +76,10 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, layers=(3, 4, 23, 3)):
+    def __init__(self, block, layers=(3, 4, 23, 3), in_channels=3):
         self.inplanes = 64
         super(ResNet, self).__init__()
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -124,22 +124,22 @@ class ResNet(nn.Module):
         return x, x_3
 
 
-def resnet18(pretrained=False):
-    model = ResNet(BasicBlock, [2, 2, 2, 2])
+def resnet18(pretrained=False, in_channels=3):
+    model = ResNet(BasicBlock, [2, 2, 2, 2], in_channels=in_channels)
     return model
 
-def resnet34(pretrained=False):
-    model = ResNet(BasicBlock, [3, 4, 6, 3])
+def resnet34(pretrained=False, in_channels=3):
+    model = ResNet(BasicBlock, [3, 4, 6, 3], in_channels=in_channels)
     return model
 
-def resnet50(pretrained=False):
-    model = ResNet(Bottleneck, [3, 4, 6, 3])
+def resnet50(pretrained=False, in_channels=3):
+    model = ResNet(Bottleneck, [3, 4, 6, 3], in_channels=in_channels)
     return model
 
-def resnet101(pretrained=False):
-    model = ResNet(Bottleneck, [3, 4, 23, 3])
+def resnet101(pretrained=False, in_channels=3):
+    model = ResNet(Bottleneck, [3, 4, 23, 3], in_channels=in_channels)
     return model
 
-def resnet152(pretrained=False):
-    model = ResNet(Bottleneck, [3, 8, 36, 3])
+def resnet152(pretrained=False, in_channels=3):
+    model = ResNet(Bottleneck, [3, 8, 36, 3], in_channels=in_channels)
     return model

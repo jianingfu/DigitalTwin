@@ -13,22 +13,23 @@ from pytorch_lightning.loggers import TensorBoardLogger
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
 parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
-parser.add_argument('--batch_size', type=int, default = 8, help='batch size')
-parser.add_argument('--workers', type=int, default = 10, help='number of data loading workers')
+parser.add_argument('--batch_size', type=int, default = 16, help='batch size')
+parser.add_argument('--workers', type=int, default = 16, help='number of data loading workers')
 parser.add_argument('--lr', default=0.0001, help='learning rate')
 parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--w', default=0.025, help='pred_c regularization')
 parser.add_argument('--w_rate', default=0.3, help='pred_c regularization decay rate')
 parser.add_argument('--decay_margin', default=0.016, help='margin to decay lr & w')
-parser.add_argument('--refine_margin', default=0.1, help='margin to start the training of iterative refinement')
 parser.add_argument('--noise_trans', default=0.03, help='range of the random noise of translation added to the training data')
 parser.add_argument('--nepoch', type=int, default=500, help='max number of epochs to train')
 parser.add_argument('--resume_posenet', type=str, default = '',  help='resume PoseNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
 parser.add_argument('--visualize', type=bool, default = True, help='visualize using plotly')
 parser.add_argument('--image_size', type=int, default=300, help="square side length of cropped image")
-parser.add_argument('--num_rot_bins', type=int, default = 18, help='number of bins discretizing the rotation around front')
+parser.add_argument('--num_rot_bins', type=int, default = 36, help='number of bins discretizing the rotation around front')
 parser.add_argument('--skip_testing', action="store_true", default=False, help='skip testing section of each epoch')
+parser.add_argument('--append_depth_to_image', action="store_true", default=False, help='put XYZ of pixel into image')
+
 # TODO: lightning has a built in performance profile, set that up!
 
 opt = parser.parse_args()
@@ -40,7 +41,6 @@ random.seed(opt.manualSeed)
 torch.manual_seed(opt.manualSeed)
 
 # :)
-opt.refine_start = False
 if __name__ == '__main__':
     torch.multiprocessing.freeze_support()
 
@@ -72,9 +72,6 @@ if __name__ == '__main__':
         dataModule = CustomDataModule(opt)
     else:
         print('Unknown dataset')
-
-    if opt.resume_refinenet != '':
-        opt.refine_start = True
 
     # init model
     densefusion = DenseFusionModule(opt)

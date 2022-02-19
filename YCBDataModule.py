@@ -18,13 +18,12 @@ class YCBDataModule(pl.LightningDataModule):
         # only called on 1 GPU/TPU in distributed
     def setup(self, stage):
         print("setting up data")
-        print("refine start: " ,self.opt.refine_start)
         # make assignments here (val/train/test split)
         # called on every process in DDP
         self.train_dataset = PoseDataset_ycb('train', self.opt.num_points, True, self.opt.dataset_root, self.opt.noise_trans, 
-                            num_rot_bins = self.opt.num_rot_bins, image_size = self.opt.image_size)
+                            num_rot_bins = self.opt.num_rot_bins, image_size = self.opt.image_size, append_depth_to_image=self.opt.append_depth_to_image)
         self.test_dataset = PoseDataset_ycb('test', self.opt.num_points, False, self.opt.dataset_root, 
-                            0.0, num_rot_bins = self.opt.num_rot_bins, image_size = self.opt.image_size)
+                            0.0, num_rot_bins = self.opt.num_rot_bins, image_size = self.opt.image_size, append_depth_to_image=self.opt.append_depth_to_image)
         self.sym_list = self.train_dataset.get_sym_list()
         self.num_points_mesh = self.train_dataset.get_num_points_mesh()
         print("num points mesh", self.num_points_mesh)
