@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
 parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
 parser.add_argument('--batch_size', type=int, default = 16, help='batch size')
-parser.add_argument('--workers', type=int, default = 16, help='number of data loading workers')
+parser.add_argument('--workers', type=int, default = 10, help='number of data loading workers')
 parser.add_argument('--lr', default=0.0001, help='learning rate')
 parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--w', default=0.025, help='pred_c regularization')
@@ -84,7 +84,7 @@ if __name__ == '__main__':
                             every_n_epochs=1)
 
     logger = TensorBoardLogger("tb_logs", name="dense_fusion")
-    trainer = pl.Trainer(logger=logger, accumulate_grad_batches=opt.batch_size, 
+    trainer = pl.Trainer(logger=logger, 
                             callbacks=[checkpoint_callback],
                             max_epochs=opt.nepoch - opt.start_epoch,
                             check_val_every_n_epoch=opt.repeat_epoch,

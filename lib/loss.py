@@ -66,7 +66,7 @@ def loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front
     loss = torch.mean(pred_front_dis * front_loss_coeff + pred_rot_loss * rot_bins_loss_coeff + pred_t_loss * translation_loss_coeff)
     #loss = torch.mean(pred_front_dis * front_loss_coeff + pred_t_loss * translation_loss_coeff)
     
-    return loss, pred_front_dis, pred_rot_loss, pred_t_loss
+    return loss, torch.mean(pred_front_dis), torch.mean(pred_rot_loss), torch.mean(pred_t_loss)
 
 
 class Loss(_Loss):
