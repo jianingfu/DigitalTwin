@@ -15,7 +15,7 @@ import numpy as np
 import pdb
 import torch.nn.functional as F
 from lib.pspnet import PSPNet
-from pointnet2.pointnet2_modules import PointnetSAModuleVotes
+from pointnet2.pointnet2_modules import PointnetSAModuleMSG, PointnetFPModule
 
 psp_models = {
     'resnet18': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet18'),
@@ -24,6 +24,115 @@ psp_models = {
     'resnet101': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet101'),
     'resnet152': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet152')
 }
+
+class Pointnet2MSG(nn.Module):
+    r"""
+        PointNet2 with multi-scale grouping
+        Semantic segmentation network that uses feature propogation layers
+
+        Parameters
+        ----------
+        input_channels: int = 6
+            Number of input channels in the feature descriptor for each point.  If the point cloud is Nx9, this
+            value should be 6 as in an Nx9 point cloud, 3 of the channels are xyz, and 6 are feature descriptors
+        use_xyz: bool = True
+            Whether or not to use the xyz position of a point as a feature
+    """
+
+    def __init__(
+        self, input_channels=6, use_xyz=True
+    ):
+        super(Pointnet2MSG, self).__init__()
+
+        self.SA_modules = nn.ModuleList()
+        c_in = input_channels
+        self.SA_modules.append(
+            PointnetSAModuleMSG(
+                npoint=2048,
+                radii=[0.0175, 0.025],
+                nsamples=[16, 32],
+                mlps=[[c_in, 16, 16, 32], [c_in, 32, 32, 64]],
+                use_xyz=use_xyz,
+            )
+        )
+        c_out_0 = 32 + 64
+
+        c_in = c_out_0
+        self.SA_modules.append(
+            PointnetSAModuleMSG(
+                npoint=1024,
+                radii=[0.025, 0.05],
+                nsamples=[16, 32],
+                mlps=[[c_in, 64, 64, 128], [c_in, 64, 96, 128]],
+                use_xyz=use_xyz,
+            )
+        )
+        c_out_1 = 128 + 128
+
+        c_in = c_out_1
+        self.SA_modules.append(
+            PointnetSAModuleMSG(
+                npoint=512,
+                radii=[0.05, 0.1],
+                nsamples=[16, 32],
+                mlps=[[c_in, 128, 196, 256], [c_in, 128, 196, 256]],
+                use_xyz=use_xyz,
+            )
+        )
+        c_out_2 = 256 + 256
+
+        c_in = c_out_2
+        self.SA_modules.append(
+            PointnetSAModuleMSG(
+                npoint=128,
+                radii=[0.1, 0.2],
+                nsamples=[16, 32],
+                mlps=[[c_in, 256, 256, 512], [c_in, 256, 384, 512]],
+                use_xyz=use_xyz,
+            )
+        )
+        c_out_3 = 512 + 512
+
+        self.FP_modules = nn.ModuleList()
+        self.FP_modules.append(PointnetFPModule(mlp=[256 + input_channels, 128, 128]))
+        self.FP_modules.append(PointnetFPModule(mlp=[512 + c_out_0, 256, 256]))
+        self.FP_modules.append(PointnetFPModule(mlp=[512 + c_out_1, 512, 512]))
+        self.FP_modules.append(PointnetFPModule(mlp=[c_out_3 + c_out_2, 512, 512]))
+
+    def _break_up_pc(self, pc):
+        xyz = pc[..., 0:3].contiguous()
+        features = pc[..., 3:].transpose(1, 2).contiguous() if pc.size(-1) > 3 else None
+
+        return xyz, features
+
+    def forward(self, pointcloud):
+        r"""
+            Forward pass of the network
+
+            Parameters
+            ----------
+            pointcloud: Variable(torch.cuda.FloatTensor)
+                (B, N, 3 + input_channels) tensor
+                Point cloud to run predicts on
+                Each point in the point-cloud MUST
+                be formated as (x, y, z, features...)
+        """
+        _, N, _ = pointcloud.size()
+
+        xyz, features = self._break_up_pc(pointcloud)
+
+        l_xyz, l_features = [xyz], [features]
+        for i in range(len(self.SA_modules)):
+            li_xyz, li_features = self.SA_modules[i](l_xyz[i], l_features[i])
+            l_xyz.append(li_xyz)
+            l_features.append(li_features)
+
+        for i in range(-1, -(len(self.FP_modules) + 1), -1):
+            l_features[i - 1] = self.FP_modules[i](
+                l_xyz[i - 1], l_xyz[i], l_features[i - 1], l_features[i]
+            )
+
+        return l_features[0]
 
 class ModifiedResnet(nn.Module):
 
@@ -38,71 +147,43 @@ class ModifiedResnet(nn.Module):
         x = self.model(x)
         return x
 
-class PoseNetFeat(nn.Module):
+class DenseFusion(nn.Module):
     def __init__(self, num_points):
-        super(PoseNetFeat, self).__init__()
-        self.conv1 = torch.nn.Conv1d(3, 64, 1)
-        #self.bn1 = torch.nn.BatchNorm1d(64)
-        self.conv2 = torch.nn.Conv1d(64, 128, 1)
-        #self.bn2 = torch.nn.BatchNorm1d(128)
+        super(DenseFusion, self).__init__()
+        self.conv2_rgb = torch.nn.Conv1d(128, 256, 1)
+        self.conv2_cld = torch.nn.Conv1d(128, 256, 1)
 
-        self.e_conv1 = torch.nn.Conv1d(32, 64, 1)
-        #self.e_bn1 = torch.nn.BatchNorm1d(64)
-        self.e_conv2 = torch.nn.Conv1d(64, 128, 1)
-        #self.e_bn2 = torch.nn.BatchNorm1d(128)
-
-        self.conv5 = torch.nn.Conv1d(256, 512, 1)
-        #self.bn5 = torch.nn.BatchNorm1d(512)
-        self.conv6 = torch.nn.Conv1d(512, 1024, 1)
-        #self.bn6 = torch.nn.BatchNorm1d(1024)
+        self.conv3 = torch.nn.Conv1d(256, 512, 1)
+        self.conv4 = torch.nn.Conv1d(512, 1024, 1)
 
         self.ap1 = torch.nn.AvgPool1d(num_points)
-        self.num_points = num_points
-    def forward(self, x, emb):
 
-        #"pointnet" layer
-        #XYZ -> 64 dim embedding
-        x = F.relu(self.conv1(x))
+    def forward(self, rgb_emb, cld_emb):
+        bs, _, n_pts = cld_emb.size()
+        feat_1 = torch.cat((rgb_emb, cld_emb), dim=1)
+        rgb = F.relu(self.conv2_rgb(rgb_emb))
+        cld = F.relu(self.conv2_cld(cld_emb))
 
-        #32 dim embedding -> 64 dim embedding
-        emb = F.relu(self.e_conv1(emb))
+        feat_2 = torch.cat((rgb, cld), dim=1)
 
-        #concating them
-        pointfeat_1 = torch.cat((x, emb), dim=1)
+        rgbd = F.relu(self.conv3(feat_1))
+        rgbd = F.relu(self.conv4(rgbd))
 
-        #64 dim embedding -> 128 dim embedding
-        x = F.relu(self.conv2(x))
-        #64 dim embedding -> 128 dim embedding
-        emb = F.relu(self.e_conv2(emb))
+        ap_x = self.ap1(rgbd)
 
-        #concating them
-        pointfeat_2 = torch.cat((x, emb), dim=1)
-
-        #lifting fused 128 + 128 -> 512
-        x = F.relu(self.conv5(pointfeat_2))
-
-        #lifting fused 256 + 256 -> 1024
-        x = F.relu(self.conv6(x))
-
-        #average pooling on into 1 1024 global feature
-        ap_x = self.ap1(x)
-
-        #repeat it so they can staple it onto the back of every pixel/point
-        ap_x = ap_x.view(-1, 1024, 1).repeat(1, 1, self.num_points)
-
-        #64 + 64 (level 1), 128 + 128 (level 2), 1024 global feature
-        return torch.cat([pointfeat_1, pointfeat_2, ap_x], 1) #128 + 256 + 1024
+        ap_x = ap_x.view(-1, 1024, 1).repeat(1, 1, n_pts)
+        return torch.cat([feat_1, feat_2, ap_x], 1) # 256 + 512 + 1024 = 1792
 
 class PoseNet(nn.Module):
     def __init__(self, num_points, num_obj, num_rot_bins, num_image_channels=3):
         super(PoseNet, self).__init__()
         self.num_points = num_points
         self.cnn = ModifiedResnet(in_channels=num_image_channels)
-        self.feat = PoseNetFeat(num_points)
+        self.df = DenseFusion(num_points)
         
-        self.conv1_front = torch.nn.Conv1d(1408, 640, 1)
-        self.conv1_rot_bins = torch.nn.Conv1d(1408, 640, 1)
-        self.conv1_t = torch.nn.Conv1d(1408, 640, 1)
+        self.conv1_front = torch.nn.Conv1d(1792, 640, 1)
+        self.conv1_rot_bins = torch.nn.Conv1d(1792, 640, 1)
+        self.conv1_t = torch.nn.Conv1d(1792, 640, 1)
 
         self.conv2_front = torch.nn.Conv1d(640, 256, 1)
         self.conv2_rot_bins = torch.nn.Conv1d(640, 256, 1)
@@ -119,6 +200,8 @@ class PoseNet(nn.Module):
         self.num_obj = num_obj
         self.num_rot_bins = num_rot_bins
 
+        self.pointnet2 = Pointnet2MSG(input_channels=0)
+
     def forward(self, img, x, choose, obj):
 
         out_img = self.cnn(img)
@@ -130,11 +213,13 @@ class PoseNet(nn.Module):
         emb = torch.gather(emb, 2, choose).contiguous()
         
         orig_x = x
-        x = x.transpose(2, 1).contiguous()
+        #x = x.transpose(2, 1).contiguous()
+
+        feat_x = self.pointnet2(x)
 
         #x is pointcloud
         #emb is cnn embedding
-        ap_x = self.feat(x, emb)
+        ap_x = self.df(emb, feat_x)
 
         fx = F.relu(self.conv1_front(ap_x))
         rx = F.relu(self.conv1_rot_bins(ap_x))

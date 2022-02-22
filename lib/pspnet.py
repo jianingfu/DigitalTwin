@@ -50,16 +50,19 @@ class PSPNet(nn.Module):
         self.up_3 = PSPUpsample(64, 64)
 
         self.drop_2 = nn.Dropout2d(p=0.15)
-        self.final = nn.Sequential(
-            nn.Conv2d(64, 32, kernel_size=1),
-            nn.LogSoftmax()
-        )
 
-        self.classifier = nn.Sequential(
-            nn.Linear(deep_features_size, 256),
-            nn.ReLU(),
-            nn.Linear(256, n_classes)
-        )
+        self.final = nn.Conv2d(64, 128, kernel_size=1)
+
+        # self.final = nn.Sequential(
+        #     nn.Conv2d(64, 32, kernel_size=1),
+        #     nn.LogSoftmax()
+        # )
+
+        # self.classifier = nn.Sequential(
+        #     nn.Linear(deep_features_size, 256),
+        #     nn.ReLU(),
+        #     nn.Linear(256, n_classes)
+        # )
 
     def forward(self, x):
         f, class_f = self.feats(x) 
