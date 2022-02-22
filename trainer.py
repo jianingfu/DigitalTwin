@@ -25,6 +25,7 @@ parser.add_argument('--image_size', type=int, default=300, help="square side len
 parser.add_argument('--num_rot_bins', type=int, default = 36, help='number of bins discretizing the rotation around front')
 parser.add_argument('--skip_testing', action="store_true", default=False, help='skip testing section of each epoch')
 parser.add_argument('--append_depth_to_image', action="store_true", default=False, help='put XYZ of pixel into image')
+parser.add_argument('--resume', action="store_true", default=False, help='resume from ckpt/last.ckpt')
 
 # TODO: lightning has a built in performance profile, set that up!
 
@@ -88,4 +89,7 @@ if __name__ == '__main__':
                             profiler="advanced",
                             resume_from_checkpoint= opt.resume_posenet,
                             )
-    trainer.fit(densefusion, datamodule=dataModule)
+    if opt.resume:
+        trainer.fit(densefusion, datamodule=dataModule, ckpt_path="ckpt/last.ckpt")
+    else:
+        trainer.fit(densefusion, datamodule=dataModule)

@@ -116,8 +116,6 @@ def main():
     parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
     parser.add_argument('--workers', type=int, default = 1, help='number of data loading workers')
     parser.add_argument('--model', type=str, default = '',  help='PoseNet model')
-    parser.add_argument('--w', default=0.015, help='regularize confidence')
-    parser.add_argument('--w_rate', default=0.3, help='regularize confidence refiner decay')
 
     parser.add_argument('--num_rot_bins', type=int, default = 36, help='number of bins discretizing the rotation around front')
     parser.add_argument('--num_visualized', type=int, default = 5, help='number of training samples to visualize')
@@ -168,10 +166,6 @@ def main():
 
     dists = []
 
-    #vote clustering
-    radius = 0.08
-    ms = MeanShiftTorch(bandwidth=radius)
-
     for i, data in enumerate(testdataloader, 0):
         points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = data
 
@@ -187,7 +181,7 @@ def main():
 
         #pred_front and pred_t are now absolute positions for front and center keypoint
         pred_front, pred_rot_bins, pred_t, emb = estimator(img, points, choose, idx)
-        loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, model_points, points, opt.w)
+        loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t, idx)
 
         visualize_pointcloud(t, "{0}_gt_t".format(i))
         visualize_pointcloud(pred_t, "{0}_pred_t".format(i))
@@ -199,6 +193,10 @@ def main():
 
         mean_front = torch.mean(pred_front, 1)
         mean_t = torch.mean(pred_t, 1)
+        
+        #vote clustering
+        radius = 0.08
+        ms = MeanShiftTorch(bandwidth=radius)
 
         #batch size = 1 always
         my_front, front_labels = ms.fit(pred_front.squeeze(0))

@@ -1,8 +1,8 @@
 import torch
 
-rot_bins_loss_coeff = 1
+rot_bins_loss_coeff = .1
 front_loss_coeff = 1
-translation_loss_coeff = 4
+translation_loss_coeff = 1
 
 
 def roll_by_gather(mat,dim, shifts: torch.LongTensor):

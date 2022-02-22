@@ -17,3 +17,4 @@ datasets/custom/custom_preprocessed
 *.ply
 ckpt/
 tb_logs/
+*.png

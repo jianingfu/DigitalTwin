@@ -145,6 +145,8 @@ class DenseFusionModule(pl.LightningModule):
         return loss.item()
 
     def validation_epoch_end(self, outputs):
+        torch.save(self.estimator.state_dict(), '{0}/pose_model_current.pth'.format(self.opt.outf))
+
         test_loss = np.average(np.array(outputs))
         if test_loss <= self.best_test:
             self.best_test = test_loss
