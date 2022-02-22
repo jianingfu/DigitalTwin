@@ -53,7 +53,7 @@ class DenseFusionModule(pl.LightningModule):
 
         # torch.cuda.empty_cache()
 
-        loss, front_loss, rot_loss, t_loss = self.criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, model_points, points, self.opt.w)
+        loss, front_loss, rot_loss, t_loss = self.criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t)
 
         # self.log_dict({'train_dis':dis, 'loss': loss}, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
@@ -70,7 +70,7 @@ class DenseFusionModule(pl.LightningModule):
         points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = batch
         pred_front, pred_rot_bins, pred_t, emb = self.estimator(img, points, choose, idx)
 
-        loss, front_loss, rot_loss, t_loss = self.criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, model_points, points, self.opt.w)
+        loss, front_loss, rot_loss, t_loss = self.criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t)
 
         # if self.opt.refine_start:
         #     for ite in range(0, self.opt.iteration):
@@ -109,7 +109,7 @@ class DenseFusionModule(pl.LightningModule):
             pred_t_color = np.zeros((pred_t_vis.shape))
             pred_t_color[:,:,1] = 200
             t_colors = np.concatenate((gt_t_color, pred_t_color, projected_color), axis=1)
-            self.logger.experiment.add_mesh('t_vis', vertices=t_vis, colors=t_colors)
+            self.logger.experiment.add_mesh('t_vis ' + str(self.current_epoch), vertices=t_vis, colors=t_colors)
 
             #visualize front votes
             gt_front_vis = self.visualize_fronts(front_r, t)
@@ -121,7 +121,7 @@ class DenseFusionModule(pl.LightningModule):
             pred_front_color = np.zeros((pred_front_vis.shape))
             pred_front_color[:,:,1] = 200
             front_colors = np.concatenate((gt_front_color, pred_front_color, projected_color), axis=1)
-            self.logger.experiment.add_mesh('front_vis', vertices=front_vis, colors=front_colors)
+            self.logger.experiment.add_mesh('front_vis ' + str(self.current_epoch), vertices=front_vis, colors=front_colors)
 
             #visualize predicted model
             gt_vis, pred_vis = self.get_vis_models(model_points, points, pred_front, pred_rot_bins, pred_t, 
@@ -134,7 +134,7 @@ class DenseFusionModule(pl.LightningModule):
             pred_color[:,:,1] = 200
             colors = np.concatenate((gt_color, pred_color), axis=1)
             # summary = mesh_summary.op('point_cloud', vertices=gt_vis)
-            self.logger.experiment.add_mesh('models_vis', vertices=vis, colors=colors)    
+            self.logger.experiment.add_mesh('models_vis ' + str(self.current_epoch) , vertices=vis, colors=colors)    
 
         self.test_loss += loss.item()
         self.log('val_loss', loss, logger=True)

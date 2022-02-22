@@ -113,15 +113,17 @@ def visualize_fronts(fronts, t, label):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
-    parser.add_argument('--dataset_root', type=str, default = '', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
+    parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
     parser.add_argument('--workers', type=int, default = 1, help='number of data loading workers')
     parser.add_argument('--model', type=str, default = '',  help='PoseNet model')
     parser.add_argument('--w', default=0.015, help='regularize confidence')
     parser.add_argument('--w_rate', default=0.3, help='regularize confidence refiner decay')
 
-    parser.add_argument('--num_rot_bins', type=int, default = 90, help='number of bins discretizing the rotation around front')
+    parser.add_argument('--num_rot_bins', type=int, default = 36, help='number of bins discretizing the rotation around front')
     parser.add_argument('--num_visualized', type=int, default = 5, help='number of training samples to visualize')
     parser.add_argument('--image_size', type=int, default=300, help="square side length of cropped image")
+    parser.add_argument('--append_depth_to_image', action="store_true", default=False, help='put XYZ of pixel into image')
+
     opt = parser.parse_args()
 
     opt.manualSeed = random.randint(1, 10000)
@@ -138,16 +140,19 @@ def main():
 
     
     if opt.model != '':
-        estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects, num_rot_bins = opt.num_rot_bins)
-        estimator.cuda()
-        estimator = nn.DataParallel(estimator)
-        estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.model)))
+        num_image_channels = 3
+        if opt.append_depth_to_image:
+            num_image_channels += 3
 
-    if not opt.model:
+        estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects, num_rot_bins = opt.num_rot_bins, num_image_channels=num_image_channels)
+        estimator.cuda()
+        #estimator = nn.DataParallel(estimator)
+        estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.model)))
+    else:
         raise Exception("this is visualizer code, pls pass in a model lol")
 
     if opt.dataset == 'ycb':
-        test_dataset = PoseDataset_ycb('test', opt.num_points, False, opt.dataset_root, 0.0, opt.num_rot_bins, opt.image_size)
+        test_dataset = PoseDataset_ycb('test', opt.num_points, False, opt.dataset_root, 0.0, opt.num_rot_bins, opt.image_size, append_depth_to_image=opt.append_depth_to_image)
     else:
         exit("only ycb supported here")
     testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=opt.workers)
@@ -184,32 +189,33 @@ def main():
         pred_front, pred_rot_bins, pred_t, emb = estimator(img, points, choose, idx)
         loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, model_points, points, opt.w)
 
-        #switch back to delta vector
-        pred_front -= pred_t
-
         visualize_pointcloud(t, "{0}_gt_t".format(i))
         visualize_pointcloud(pred_t, "{0}_pred_t".format(i))
 
         visualize_fronts(front_r, t, "{0}_gt_front".format(i))
-        visualize_fronts(pred_front, pred_t, "{0}_pred_front".format(i))
+        visualize_fronts(pred_front - points, points, "{0}_pred_front".format(i))
 
         print(pred_front.shape, pred_rot_bins.shape, pred_t.shape)
 
-        front, front_labels = ms.fit(pred_front)
-        t, t_labels = ms.fit(pred_t)
+        mean_front = torch.mean(pred_front, 1)
+        mean_t = torch.mean(pred_t, 1)
 
-        print(front.shape, t.shape, front_labels.shape, t_labels.shape)
+        #batch size = 1 always
+        my_front, front_labels = ms.fit(pred_front.squeeze(0))
+        my_t, t_labels = ms.fit(pred_t.squeeze(0))
 
-        exit()
+        
+        #theta vote clustering
+        theta_radius = 15 / 180 * np.pi #15 degrees
+        ms_theta = MeanShiftTorch(bandwidth=theta_radius)
 
-        pred_rot_bins = pred_rot_bins.squeeze()
+        pred_thetas = (torch.argmax(pred_rot_bins.squeeze(0), dim=1) / opt.num_rot_bins * 2 * np.pi).unsqueeze(-1)
 
-        #angle -> bs * 1
-        angle = (torch.argmax(pred_rot_bins) / pred_rot_bins.shape[0] * 2 * np.pi)
+        my_theta, theta_labels = ms.fit(pred_thetas)
 
-        my_front = pred_front.squeeze()
-        my_theta = angle.squeeze()
-        my_t = pred_t.squeeze()
+
+        #switch to vector from center of object
+        my_front -= my_t
 
         gt_front = front_r.squeeze()
         gt_theta = torch.argmax(rot_bins) / opt.num_rot_bins * 2 * np.pi

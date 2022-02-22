@@ -12,7 +12,7 @@ from lib.loss_helper import roll_by_gather, rot_bins_loss_coeff, front_loss_coef
 cross_entropy_loss = nn.CrossEntropyLoss(reduction='none')
 
 
-def loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, model_points, points, w, num_rot_bins):
+def loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t, num_rot_bins):
 
     #print("shapes loss regular", pred_front.shape, pred_rot_bins.shape, pred_t.shape, pred_c.shape, front_r.shape, rot_bins.shape, front_orig.shape, t.shape, model_points.shape, points.shape)
 
@@ -75,6 +75,5 @@ class Loss(_Loss):
         super(Loss, self).__init__(True)
         self.num_rot_bins = num_rot_bins
 
-    def forward(self, pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, model_points, points, w):
-
-        return loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, model_points, points, w, self.num_rot_bins)
+    def forward(self, pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t):
+        return loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t, self.num_rot_bins)
