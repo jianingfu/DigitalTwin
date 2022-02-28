@@ -16,6 +16,7 @@ import pdb
 import torch.nn.functional as F
 from lib.pspnet import PSPNet
 from pointnet2.pointnet2_modules import PointnetSAModuleMSG, PointnetFPModule
+from RandLA.RandLANet import Network as RandLANet
 
 psp_models = {
     'resnet18': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet18'),
@@ -134,6 +135,23 @@ class Pointnet2MSG(nn.Module):
 
         return l_features[0]
 
+class ConfigRandLA:
+    k_n = 16  # KNN
+    num_layers = 4  # Number of layers
+    num_points = 480 * 640 // 24  # Number of input points
+    num_classes = 22  # Number of valid classes
+    sub_grid_size = 0.06  # preprocess_parameter
+
+    batch_size = 3  # batch_size during training
+    val_batch_size = 3  # batch_size during validation and test
+    train_steps = 500  # Number of steps per epochs
+    val_steps = 100  # Number of validation steps per epoch
+    in_c = 9
+
+    sub_sampling_ratio = [4, 4, 4, 4]  # sampling ratio of random sampling at each layer
+    d_out = [32, 64, 128, 256]  # feature dimension
+    num_sub_points = [num_points // 4, num_points // 16, num_points // 64, num_points // 256]
+
 class ModifiedResnet(nn.Module):
 
     def __init__(self, usegpu=True, in_channels=3):
@@ -200,7 +218,9 @@ class PoseNet(nn.Module):
         self.num_obj = num_obj
         self.num_rot_bins = num_rot_bins
 
-        self.pointnet2 = Pointnet2MSG(input_channels=0)
+        # self.pointnet2 = Pointnet2MSG(input_channels=0)
+        rndla_config = ConfigRandLA
+        self.rndla = RandLANet(rndla_config)
 
     def forward(self, img, x, choose, obj):
 
@@ -215,7 +235,8 @@ class PoseNet(nn.Module):
         orig_x = x
         #x = x.transpose(2, 1).contiguous()
 
-        feat_x = self.pointnet2(x)
+        # feat_x = self.pointnet2(x)
+        feat_x = self.rndla(x)
 
         #x is pointcloud
         #emb is cnn embedding

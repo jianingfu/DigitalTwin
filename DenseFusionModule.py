@@ -22,7 +22,7 @@ import pytorch_lightning as pl
 from datetime import datetime
 from tensorboard.plugins.mesh import summary as mesh_summary
 from lib.transformations import rotation_matrix_of_axis_angle, \
-        rotation_matrix_from_vectors_procedure
+    rotation_matrix_from_vectors_procedure
 from lib.meanshift_pytorch import MeanShiftTorch
 
 
@@ -31,7 +31,7 @@ class DenseFusionModule(pl.LightningModule):
         super().__init__()
         self.opt = opt
 
-        self.opt.manualSeed = random.randint(1, 10000) 
+        self.opt.manualSeed = random.randint(1, 10000)
         random.seed(self.opt.manualSeed)
         torch.manual_seed(self.opt.manualSeed)
 
@@ -39,11 +39,11 @@ class DenseFusionModule(pl.LightningModule):
         if self.opt.append_depth_to_image:
             num_image_channels += 3
 
-        self.estimator = PoseNet(num_points = self.opt.num_points, num_obj = self.opt.num_objects, num_rot_bins = self.opt.num_rot_bins, num_image_channels=num_image_channels)
+        self.estimator = PoseNet(num_points=self.opt.num_points, num_obj=self.opt.num_objects,
+                                 num_rot_bins=self.opt.num_rot_bins, num_image_channels=num_image_channels)
 
         self.best_test = np.Inf
         self.criterion = Loss(self.opt.num_rot_bins)
-
 
     def training_step(self, batch, batch_idx):
         # training_step defined the train loop.
@@ -78,10 +78,9 @@ class DenseFusionModule(pl.LightningModule):
         #         loss, new_points, new_rot_bins, new_t, new_front_orig, new_front_r = \
         #             self.criterion_refine(pred_front, pred_rot_bins, pred_t, new_front_r, 
         #                                 new_rot_bins, new_front_orig, new_t, idx, new_points)       
-        
+
         # visualize
         if (batch_idx == 0 and self.opt.visualize):
-
             model_points = model_points[0]
             points = points[0]
             pred_front = pred_front[0]
@@ -93,48 +92,48 @@ class DenseFusionModule(pl.LightningModule):
             front_orig = front_orig[0]
             t = t[0]
 
-
-            #projected depth image
+            # projected depth image
             projected_vis = self.visualize_pointcloud(points)
             projected_color = np.zeros((projected_vis.shape))
-            projected_color[:,:,2] = 100
+            projected_color[:, :, 2] = 100
 
-            #visualize translation votes
+            # visualize translation votes
             gt_t_vis = self.visualize_pointcloud(t)
             pred_t_vis = self.visualize_pointcloud(pred_t)
 
             t_vis = np.concatenate((gt_t_vis, pred_t_vis, projected_vis), axis=1)
             gt_t_color = np.zeros((gt_t_vis.shape))
-            gt_t_color[:,:,0] = 200
+            gt_t_color[:, :, 0] = 200
             pred_t_color = np.zeros((pred_t_vis.shape))
-            pred_t_color[:,:,1] = 200
+            pred_t_color[:, :, 1] = 200
             t_colors = np.concatenate((gt_t_color, pred_t_color, projected_color), axis=1)
             self.logger.experiment.add_mesh('t_vis ' + str(self.current_epoch), vertices=t_vis, colors=t_colors)
 
-            #visualize front votes
+            # visualize front votes
             gt_front_vis = self.visualize_fronts(front_r, t)
             pred_front_vis = self.visualize_pointcloud(pred_front)
 
             front_vis = np.concatenate((gt_front_vis, pred_front_vis, projected_vis), axis=1)
             gt_front_color = np.zeros((gt_front_vis.shape))
-            gt_front_color[:,:,0] = 200
+            gt_front_color[:, :, 0] = 200
             pred_front_color = np.zeros((pred_front_vis.shape))
-            pred_front_color[:,:,1] = 200
+            pred_front_color[:, :, 1] = 200
             front_colors = np.concatenate((gt_front_color, pred_front_color, projected_color), axis=1)
-            self.logger.experiment.add_mesh('front_vis ' + str(self.current_epoch), vertices=front_vis, colors=front_colors)
+            self.logger.experiment.add_mesh('front_vis ' + str(self.current_epoch), vertices=front_vis,
+                                            colors=front_colors)
 
-            #visualize predicted model
-            gt_vis, pred_vis = self.get_vis_models(model_points, points, pred_front, pred_rot_bins, pred_t, 
-                    emb, front_r, rot_bins, front_orig, t)
+            # visualize predicted model
+            gt_vis, pred_vis = self.get_vis_models(model_points, points, pred_front, pred_rot_bins, pred_t,
+                                                   emb, front_r, rot_bins, front_orig, t)
 
             vis = np.concatenate((gt_vis, pred_vis), axis=1)
             gt_color = np.zeros((gt_vis.shape))
-            gt_color[:,:,0] = 200
+            gt_color[:, :, 0] = 200
             pred_color = np.zeros((pred_vis.shape))
-            pred_color[:,:,1] = 200
+            pred_color[:, :, 1] = 200
             colors = np.concatenate((gt_color, pred_color), axis=1)
             # summary = mesh_summary.op('point_cloud', vertices=gt_vis)
-            self.logger.experiment.add_mesh('models_vis ' + str(self.current_epoch) , vertices=vis, colors=colors)    
+            self.logger.experiment.add_mesh('models_vis ' + str(self.current_epoch), vertices=vis, colors=colors)
 
         self.test_loss += loss.item()
         self.log('val_loss', loss, logger=True)
@@ -150,15 +149,14 @@ class DenseFusionModule(pl.LightningModule):
         test_loss = np.average(np.array(outputs))
         if test_loss <= self.best_test:
             self.best_test = test_loss
-            torch.save(self.estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(self.opt.outf, self.current_epoch, test_loss))
-        print("best_test: ", self.best_test) 
-
+            torch.save(self.estimator.state_dict(),
+                       '{0}/pose_model_{1}_{2}.pth'.format(self.opt.outf, self.current_epoch, test_loss))
+        print("best_test: ", self.best_test)
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.estimator.parameters(), lr=self.opt.lr)
-        
-        return optimizer
 
+        return optimizer
 
     """
 
@@ -196,19 +194,18 @@ class DenseFusionModule(pl.LightningModule):
     
     """
 
-    def get_vis_models(self, model_points, points, pred_front, pred_rot_bins, pred_t, 
-                    emb, front_r, rot_bins, front_orig, t):
+    def get_vis_models(self, model_points, points, pred_front, pred_rot_bins, pred_t,
+                       emb, front_r, rot_bins, front_orig, t):
 
-        #vote clustering
+        # vote clustering
         radius = 0.08
         ms = MeanShiftTorch(bandwidth=radius)
 
-        
         my_front, front_labels = ms.fit(pred_front)
         my_t, t_labels = ms.fit(pred_t)
 
-        #theta vote clustering
-        theta_radius = 15 / 180 * np.pi #15 degrees
+        # theta vote clustering
+        theta_radius = 15 / 180 * np.pi  # 15 degrees
         ms_theta = MeanShiftTorch(bandwidth=theta_radius)
 
         pred_thetas = (torch.argmax(pred_rot_bins, dim=1) / self.opt.num_rot_bins * 2 * np.pi).unsqueeze(-1)
@@ -216,13 +213,13 @@ class DenseFusionModule(pl.LightningModule):
 
         my_theta = my_theta.squeeze()
 
-        #switch to vector from center of object
+        # switch to vector from center of object
         my_front -= my_t
-        
+
         gt_front = front_r.squeeze()
         gt_theta = torch.argmax(rot_bins) / self.opt.num_rot_bins * 2 * np.pi
         gt_t = t.squeeze()
-        
+
         gt_vis = self.visualize_points(model_points, front_orig, gt_front, gt_theta, gt_t)
         pred_vis = self.visualize_points(model_points, front_orig, my_front, my_theta, my_t)
 
@@ -236,7 +233,7 @@ class DenseFusionModule(pl.LightningModule):
         t = t.reshape((-1, 3))
 
         front_points = fronts + t
-        front_points = torch.tensor(front_points[None,:])
+        front_points = torch.tensor(front_points[None, :])
         return front_points
 
     def visualize_points(self, model_points, front_orig, front, angle, t):
@@ -254,7 +251,7 @@ class DenseFusionModule(pl.LightningModule):
         R_tot = (R_axis @ Rf)
 
         pts = (model_points @ R_tot.T + t).squeeze()
-        pts = torch.tensor(pts[None,:])
+        pts = torch.tensor(pts[None, :])
         return pts
 
     def visualize_pointcloud(self, points):
@@ -262,5 +259,5 @@ class DenseFusionModule(pl.LightningModule):
         points = points.cpu().detach().numpy()
 
         points = points.reshape((-1, 3))
-        points = torch.tensor(points[None,:])
+        points = torch.tensor(points[None, :])
         return points
