@@ -167,6 +167,7 @@ def main():
     dists = []
 
     for i, data in enumerate(testdataloader, 0):
+
         points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = data
 
         points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = Variable(points).cuda(), \
@@ -181,7 +182,7 @@ def main():
 
         #pred_front and pred_t are now absolute positions for front and center keypoint
         pred_front, pred_rot_bins, pred_t, emb = estimator(img, points, choose, idx)
-        loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t, idx)
+        loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t)
 
         visualize_pointcloud(t, "{0}_gt_t".format(i))
         visualize_pointcloud(pred_t, "{0}_pred_t".format(i))
@@ -193,7 +194,7 @@ def main():
 
         mean_front = torch.mean(pred_front, 1)
         mean_t = torch.mean(pred_t, 1)
-        
+
         #vote clustering
         radius = 0.08
         ms = MeanShiftTorch(bandwidth=radius)
@@ -209,7 +210,7 @@ def main():
 
         pred_thetas = (torch.argmax(pred_rot_bins.squeeze(0), dim=1) / opt.num_rot_bins * 2 * np.pi).unsqueeze(-1)
 
-        my_theta, theta_labels = ms.fit(pred_thetas)
+        my_theta, theta_labels = ms_theta.fit(pred_thetas)
 
 
         #switch to vector from center of object
@@ -229,7 +230,7 @@ def main():
         visualize_points(model_points, front_orig, my_front, my_theta, my_t, "{0}_pred".format(i))
         visualize_pointcloud(points, "{0}_projected_depth".format(i))
 
-        if i >= opt.num_visualized:
+        if i + 1 >= opt.num_visualized:
             print("finished visualizing!")
             exit()
 

@@ -71,7 +71,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
     parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
-    parser.add_argument('--workers', type=int, default = 1, help='number of data loading workers')
     parser.add_argument('--model', type=str, default = '',  help='PoseNet model')
     parser.add_argument('--output', type=str, default = 'visualization', help='where to dump output')
 
@@ -129,7 +128,11 @@ def main():
 
     colors = [(96, 60, 20), (156, 39, 6), (212, 91, 18), (243, 188, 46), (95, 84, 38)]
 
-    for sample_idx in range(len(test_dataset)):
+    start_sample = 0
+
+    for sample_idx in range(start_sample, len(test_dataset)):
+
+        print("processing sample", sample_idx)
 
         img_filename = '{0}/{1}-color.png'.format(test_dataset.root, test_dataset.list[sample_idx])
         color_img = cv2.imread(img_filename)
@@ -137,6 +140,8 @@ def main():
         data_objs = test_dataset.get_all_objects(sample_idx)
 
         for obj_idx, data in enumerate(data_objs):
+
+            torch.cuda.empty_cache()
 
             data, intrinsics = data
             cam_fx, cam_fy, cam_cx, cam_cy = intrinsics
@@ -174,10 +179,12 @@ def main():
 
             pred_thetas = (torch.argmax(pred_rot_bins.squeeze(0), dim=1) / opt.num_rot_bins * 2 * np.pi).unsqueeze(-1)
 
-            my_theta, theta_labels = ms.fit(pred_thetas)
+            my_theta, theta_labels = ms_theta.fit(pred_thetas)
 
             #switch to vector from center of object
             my_front -= my_t
+
+            gt_theta = torch.argmax(rot_bins) / opt.num_rot_bins * 2 * np.pi
 
             pts = get_model_points(model_points, front_orig, my_front, my_theta, my_t)
             projected_pts = project_points(pts, cam_fx, cam_fy, cam_cx, cam_cy)

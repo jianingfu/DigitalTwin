@@ -159,43 +159,6 @@ class DenseFusionModule(pl.LightningModule):
         
         return optimizer
 
-
-    """
-
-        visualize_pointcloud(t, "{0}_gt_t".format(i))
-        visualize_pointcloud(pred_t, "{0}_pred_t".format(i))
-
-        visualize_fronts(front_r, t, "{0}_gt_front".format(i))
-        visualize_fronts(pred_front - points, points, "{0}_pred_front".format(i))
-
-        print(pred_front.shape, pred_rot_bins.shape, pred_t.shape)
-
-        mean_front = torch.mean(pred_front, 1)
-        mean_t = torch.mean(pred_t, 1)
-
-        #batch size = 1 always
-        my_front, front_labels = ms.fit(pred_front.squeeze(0))
-        my_t, t_labels = ms.fit(pred_t.squeeze(0))
-
-        #switch to vector from center of object
-        my_front -= my_t
-
-        gt_front = front_r.squeeze()
-        gt_theta = torch.argmax(rot_bins) / opt.num_rot_bins * 2 * np.pi
-        gt_t = t.squeeze()
-
-        #pts_gt = get_points(model_points, front_orig, gt_front, gt_theta, gt_t)
-        #pts_pred = get_points(model_points, front_orig, my_front, my_theta, my_t)
-
-        #dist = dist2(pts_gt, pts_pred)
-        #dists.append(np.mean(np.min(dist, axis=1)))
-
-        visualize_points(model_points, front_orig, gt_front, gt_theta, gt_t, "{0}_gt".format(i))
-        visualize_points(model_points, front_orig, my_front, gt_theta, my_t, "{0}_pred".format(i))
-        visualize_pointcloud(points, "{0}_projected_depth".format(i))
-    
-    """
-
     def get_vis_models(self, model_points, points, pred_front, pred_rot_bins, pred_t, 
                     emb, front_r, rot_bins, front_orig, t):
 

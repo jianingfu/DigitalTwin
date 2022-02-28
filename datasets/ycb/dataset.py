@@ -8,14 +8,15 @@ import torchvision.transforms as transforms
 import argparse
 import time
 import random
-from lib.transformations import rotation_matrix_from_vectors_procedure, axis_angle_of_rotation_matrix
+from lib.transformations import rotation_matrix_from_vectors_procedure, axis_angle_of_rotation_matrix, rotation_matrix_of_axis_angle
+from lib.fill_depth import fill_missing
 import numpy.ma as ma
 import copy
 import scipy.misc
 import scipy.io as scio
 from datetime import datetime
-#import open3d as o3d
-#import cv2
+import open3d as o3d
+import cv2
 
 def standardize_image_size(target_image_size, rmin, rmax, cmin, cmax, image_height, image_width):
     height, width = rmax - rmin, cmax - cmin
@@ -53,7 +54,7 @@ def standardize_image_size(target_image_size, rmin, rmax, cmin, cmax, image_heig
     return rmin, rmax, cmin, cmax
 
 class PoseDataset(data.Dataset):
-    def __init__(self, mode, num_pt, add_noise, root, noise_trans, num_rot_bins, image_size, append_depth_to_image=False, add_front_aug=False):
+    def __init__(self, mode, num_pt, add_noise, root, noise_trans, num_rot_bins, image_size, append_depth_to_image=False):
         if mode == 'train':
             self.path = 'datasets/ycb/dataset_config/train_data_list.txt'
         elif mode == 'test':
@@ -65,9 +66,6 @@ class PoseDataset(data.Dataset):
         print("root", self.root)
 
         self.append_depth_to_image = append_depth_to_image
-
-        #doesn't really make sense the way this is implemented
-        self.add_front_aug = add_front_aug
 
         self.add_noise = add_noise
         self.noise_trans = noise_trans
@@ -255,32 +253,13 @@ class PoseDataset(data.Dataset):
 
         #cv2.imwrite("label_orig.png", label)
 
-        #going to use mask_front to add synthetic on top of both img and depth
-        add_front = False
-        if self.add_noise and self.add_front_aug:
-            for k in range(5):
-                seed = random.choice(self.syn)
-                front_rgb = np.array(self.trancolor(Image.open('{0}/{1}-color.png'.format(self.root, seed)).convert("RGB")))
-                front_depth = np.array(Image.open('{0}/{1}-depth.png'.format(self.root, seed)))
-                front_rgb = np.transpose(front_rgb, (2, 0, 1))
-                f_label = np.array(Image.open('{0}/{1}-label.png'.format(self.root, seed)))
-                front_label = np.unique(f_label).tolist()[1:]
-                if len(front_label) < self.front_num:
-                   continue
-                front_label = random.sample(front_label, self.front_num)
-                for f_i in front_label:
-                    mk = ma.getmaskarray(ma.masked_not_equal(f_label, f_i))
-                    if f_i == front_label[0]:
-                        mask_front = mk
-                    else:
-                        mask_front = mask_front * mk
-                t_label = label * mask_front
-                if len(t_label.nonzero()[0]) > 1000:
-                    label = t_label
-                    add_front = True
-                    break
-
         obj = meta['cls_indexes'].flatten().astype(np.int32)
+
+        #fill depth image holes
+        cam_scale = meta['factor_depth'][0][0]
+        depth = fill_missing(depth, cam_scale, 1)
+        depth[depth < 0] = 0
+        depth = depth.astype(np.int32)
 
         #select an object and 
         while 1:
@@ -317,13 +296,12 @@ class PoseDataset(data.Dataset):
         target_t = np.array([meta['poses'][:, :, idx][:, 3:4].flatten()])
         add_t = np.array([random.uniform(-self.noise_trans, self.noise_trans) for i in range(3)])
 
-
         #calculating our histogram rotation representation
         
         #right now, we are only dealing with one "front" axis
         front = self.frontd[obj[idx]][0]
 
-        front = front / np.linalg.norm(front) * 0.1
+        front = front / np.linalg.norm(front)
 
         #symmetries
         symm = self.symmd[obj[idx]]
@@ -342,11 +320,11 @@ class PoseDataset(data.Dataset):
         #axis will be the same as R_around_front
         axis, angle = axis_angle_of_rotation_matrix(R_around_front)
 
+
         #negate the axis and the angle
         if np.abs(np.linalg.norm(axis + front_r)) < 0.001:
             axis = -axis
             angle = -angle
-
         if angle < 0:
             angle += np.pi * 2
         if angle > np.pi * 2:
@@ -403,12 +381,6 @@ class PoseDataset(data.Dataset):
         #cv2.imwrite("test_no_front.png", np.transpose(img_masked, (1, 2, 0)))
         #cv2.imwrite("depth_no_front.png", depth_masked.astype(np.uint16))
 
-        if self.add_noise and add_front:
-            #print("adding front")
-
-            img_masked = img_masked * mask_front[rmin:rmax, cmin:cmax] + front_rgb[:, rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
-            depth_masked = depth_masked * mask_front[rmin:rmax, cmin:cmax] + front_depth[rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
-
         if self.list[index][:8] == 'data_syn':
             img_masked = img_masked + np.random.normal(loc=0.0, scale=7.0, size=img_masked.shape)
 
@@ -430,15 +402,6 @@ class PoseDataset(data.Dataset):
 
             cloud = np.transpose(cloud, (2, 0, 1))
 
-            #cv2.imwrite("label.png", label)
-            #cv2.imwrite("test.png", np.transpose(img_masked, (1, 2, 0)))
-            #cv2.imwrite("depth.png", depth_masked.astype(np.uint16))
-
-            #test_pcld = o3d.geometry.PointCloud()
-            #test_pcld.points = o3d.utility.Vector3dVector(np.transpose(cloud, (1, 2, 0)).reshape((-1, 3)))
-            #test_pcld.colors = o3d.utility.Vector3dVector(np.transpose(img_masked, (1, 2, 0)).reshape((-1, 3)))
-            #o3d.io.write_point_cloud("projected.ply", test_pcld)
-
             cloud = torch.from_numpy(cloud.astype(np.float32))
 
             img_masked = torch.cat((img_masked, cloud), axis=0)
@@ -459,6 +422,9 @@ class PoseDataset(data.Dataset):
         model_points = self.cld[obj[idx]]
         select_list = np.random.choice(len(model_points), self.num_pt_mesh_small, replace=False) # without replacement, so that it won't choice duplicate points
         model_points = model_points[select_list]
+
+        #pull the front_r closer to the object
+        front_r *= 0.1
 
         return torch.from_numpy(cloud.astype(np.float32)), \
                torch.LongTensor(choose.astype(np.int32)), \
@@ -504,36 +470,17 @@ class PoseDataset(data.Dataset):
 
         #cv2.imwrite("label_orig.png", label)
 
-        #going to use mask_front to add synthetic on top of both img and depth
-        add_front = False
-        if self.add_noise and self.add_front_aug:
-            for k in range(5):
-                seed = random.choice(self.syn)
-                front_rgb = np.array(self.trancolor(Image.open('{0}/{1}-color.png'.format(self.root, seed)).convert("RGB")))
-                front_depth = np.array(Image.open('{0}/{1}-depth.png'.format(self.root, seed)))
-                front_rgb = np.transpose(front_rgb, (2, 0, 1))
-                f_label = np.array(Image.open('{0}/{1}-label.png'.format(self.root, seed)))
-                front_label = np.unique(f_label).tolist()[1:]
-                if len(front_label) < self.front_num:
-                   continue
-                front_label = random.sample(front_label, self.front_num)
-                for f_i in front_label:
-                    mk = ma.getmaskarray(ma.masked_not_equal(f_label, f_i))
-                    if f_i == front_label[0]:
-                        mask_front = mk
-                    else:
-                        mask_front = mask_front * mk
-                t_label = label * mask_front
-                if len(t_label.nonzero()[0]) > 1000:
-                    label = t_label
-                    add_front = True
-                    break
-
         obj = meta['cls_indexes'].flatten().astype(np.int32)
 
         data_output = []
 
         orig_img = img
+
+        #fill depth image holes
+        cam_scale = meta['factor_depth'][0][0]
+        depth = fill_missing(depth, cam_scale, 1)
+        depth[depth < 0] = 0
+        depth = depth.astype(np.int32)
 
         for idx in range(len(obj)):
             mask_depth = ma.getmaskarray(ma.masked_not_equal(depth, 0))
@@ -576,8 +523,6 @@ class PoseDataset(data.Dataset):
             
             #right now, we are only dealing with one "front" axis
             front = self.frontd[obj[idx]][0]
-
-            front = front / np.linalg.norm(front) * 0.1
 
             #symmetries
             symm = self.symmd[obj[idx]]
@@ -659,12 +604,6 @@ class PoseDataset(data.Dataset):
             #cv2.imwrite("test_no_front.png", np.transpose(img_masked, (1, 2, 0)))
             #cv2.imwrite("depth_no_front.png", depth_masked.astype(np.uint16))
 
-            if self.add_noise and add_front:
-                #print("adding front")
-
-                img_masked = img_masked * mask_front[rmin:rmax, cmin:cmax] + front_rgb[:, rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
-                depth_masked = depth_masked * mask_front[rmin:rmax, cmin:cmax] + front_depth[rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
-
             if self.list[index][:8] == 'data_syn':
                 img_masked = img_masked + np.random.normal(loc=0.0, scale=7.0, size=img_masked.shape)
 
@@ -715,6 +654,8 @@ class PoseDataset(data.Dataset):
             model_points = self.cld[obj[idx]]
             select_list = np.random.choice(len(model_points), self.num_pt_mesh_small, replace=False) # without replacement, so that it won't choice duplicate points
             model_points = model_points[select_list]
+
+            front_r *= 0.1
 
             data_output.append(
                 ([torch.from_numpy(cloud.astype(np.float32)), \
