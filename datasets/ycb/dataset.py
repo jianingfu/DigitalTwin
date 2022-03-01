@@ -655,6 +655,8 @@ class PoseDataset(data.Dataset):
             select_list = np.random.choice(len(model_points), self.num_pt_mesh_small, replace=False) # without replacement, so that it won't choice duplicate points
             model_points = model_points[select_list]
 
+            target = model_points @ target_r.T + target_t
+
             front_r *= 0.1
 
             data_output.append(
@@ -666,6 +668,7 @@ class PoseDataset(data.Dataset):
                 torch.from_numpy(front.astype(np.float32)), \
                 torch.from_numpy(target_t.astype(np.float32)), \
                 torch.from_numpy(model_points.astype(np.float32)), \
+                torch.from_numpy(target.astype(np.float32)), \
                 torch.LongTensor([int(obj[idx]) - 1])], (cam_fx, cam_fy, cam_cx, cam_cy)))
 
         return data_output

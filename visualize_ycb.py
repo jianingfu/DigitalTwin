@@ -164,77 +164,75 @@ def main():
 
     estimator.eval()
 
-    dists = []
+    with torch.no_grad():
 
-    for i, data in enumerate(testdataloader, 0):
+        for i, data in enumerate(testdataloader, 0):
 
-        points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = data
+            points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = data
 
-        points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = Variable(points).cuda(), \
-                                                            Variable(choose).cuda(), \
-                                                            Variable(img).cuda(), \
-                                                            Variable(front_r).cuda(), \
-                                                            Variable(rot_bins).cuda(), \
-                                                            Variable(front_orig).cuda(), \
-                                                            Variable(t).cuda(), \
-                                                            Variable(model_points).cuda(), \
-                                                            Variable(idx).cuda()
+            points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = Variable(points).cuda(), \
+                                                                Variable(choose).cuda(), \
+                                                                Variable(img).cuda(), \
+                                                                Variable(front_r).cuda(), \
+                                                                Variable(rot_bins).cuda(), \
+                                                                Variable(front_orig).cuda(), \
+                                                                Variable(t).cuda(), \
+                                                                Variable(model_points).cuda(), \
+                                                                Variable(idx).cuda()
 
-        #pred_front and pred_t are now absolute positions for front and center keypoint
-        pred_front, pred_rot_bins, pred_t, emb = estimator(img, points, choose, idx)
-        loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t)
+            #pred_front and pred_t are now absolute positions for front and center keypoint
+            pred_front, pred_rot_bins, pred_t, emb = estimator(img, points, choose, idx)
+            loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t)
 
-        visualize_pointcloud(t, "{0}_gt_t".format(i))
-        visualize_pointcloud(pred_t, "{0}_pred_t".format(i))
+            visualize_pointcloud(t, "{0}_gt_t".format(i))
+            visualize_pointcloud(pred_t, "{0}_pred_t".format(i))
 
-        visualize_fronts(front_r, t, "{0}_gt_front".format(i))
-        visualize_fronts(pred_front - points, points, "{0}_pred_front".format(i))
+            visualize_fronts(front_r, t, "{0}_gt_front".format(i))
+            visualize_fronts(pred_front - points, points, "{0}_pred_front".format(i))
 
-        print(pred_front.shape, pred_rot_bins.shape, pred_t.shape)
+            print(pred_front.shape, pred_rot_bins.shape, pred_t.shape)
 
-        mean_front = torch.mean(pred_front, 1)
-        mean_t = torch.mean(pred_t, 1)
+            mean_front = torch.mean(pred_front, 1)
+            mean_t = torch.mean(pred_t, 1)
 
-        #vote clustering
-        radius = 0.08
-        ms = MeanShiftTorch(bandwidth=radius)
+            #vote clustering
+            radius = 0.08
+            ms = MeanShiftTorch(bandwidth=radius)
 
-        #batch size = 1 always
-        my_front, front_labels = ms.fit(pred_front.squeeze(0))
-        my_t, t_labels = ms.fit(pred_t.squeeze(0))
+            #batch size = 1 always
+            my_front, front_labels = ms.fit(pred_front.squeeze(0))
+            my_t, t_labels = ms.fit(pred_t.squeeze(0))
 
-        
-        #theta vote clustering
-        theta_radius = 15 / 180 * np.pi #15 degrees
-        ms_theta = MeanShiftTorch(bandwidth=theta_radius)
+            
+            #theta vote clustering
+            theta_radius = 15 / 180 * np.pi #15 degrees
+            ms_theta = MeanShiftTorch(bandwidth=theta_radius)
 
-        pred_thetas = (torch.argmax(pred_rot_bins.squeeze(0), dim=1) / opt.num_rot_bins * 2 * np.pi).unsqueeze(-1)
+            pred_thetas = (torch.argmax(pred_rot_bins.squeeze(0), dim=1) / opt.num_rot_bins * 2 * np.pi).unsqueeze(-1)
 
-        my_theta, theta_labels = ms_theta.fit(pred_thetas)
+            my_theta, theta_labels = ms_theta.fit(pred_thetas)
 
 
-        #switch to vector from center of object
-        my_front -= my_t
+            #switch to vector from center of object
+            my_front -= my_t
 
-        gt_front = front_r.squeeze()
-        gt_theta = torch.argmax(rot_bins) / opt.num_rot_bins * 2 * np.pi
-        gt_t = t.squeeze()
+            gt_front = front_r.squeeze()
+            gt_theta = torch.argmax(rot_bins) / opt.num_rot_bins * 2 * np.pi
+            gt_t = t.squeeze()
 
-        #pts_gt = get_points(model_points, front_orig, gt_front, gt_theta, gt_t)
-        #pts_pred = get_points(model_points, front_orig, my_front, my_theta, my_t)
+            #pts_gt = get_points(model_points, front_orig, gt_front, gt_theta, gt_t)
+            #pts_pred = get_points(model_points, front_orig, my_front, my_theta, my_t)
 
-        #dist = dist2(pts_gt, pts_pred)
-        #dists.append(np.mean(np.min(dist, axis=1)))
+            #dist = dist2(pts_gt, pts_pred)
+            #dists.append(np.mean(np.min(dist, axis=1)))
 
-        visualize_points(model_points, front_orig, gt_front, gt_theta, gt_t, "{0}_gt".format(i))
-        visualize_points(model_points, front_orig, my_front, my_theta, my_t, "{0}_pred".format(i))
-        visualize_pointcloud(points, "{0}_projected_depth".format(i))
+            visualize_points(model_points, front_orig, gt_front, gt_theta, gt_t, "{0}_gt".format(i))
+            visualize_points(model_points, front_orig, my_front, my_theta, my_t, "{0}_pred".format(i))
+            visualize_pointcloud(points, "{0}_projected_depth".format(i))
 
-        if i + 1 >= opt.num_visualized:
-            print("finished visualizing!")
-            exit()
-
-    #print(np.mean(dists))
+            if i + 1 >= opt.num_visualized:
+                print("finished visualizing!")
+                exit()
 
 
 if __name__ == '__main__':

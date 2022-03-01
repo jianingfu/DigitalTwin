@@ -120,84 +120,81 @@ def main():
 
     estimator.eval()
 
-    dists = []
-
-    #vote clustering
-    radius = 0.08
-    ms = MeanShiftTorch(bandwidth=radius)
-
     colors = [(96, 60, 20), (156, 39, 6), (212, 91, 18), (243, 188, 46), (95, 84, 38)]
 
-    start_sample = 0
+    with torch.no_grad():
 
-    for sample_idx in range(start_sample, len(test_dataset)):
-
-        print("processing sample", sample_idx)
-
-        img_filename = '{0}/{1}-color.png'.format(test_dataset.root, test_dataset.list[sample_idx])
-        color_img = cv2.imread(img_filename)
-
-        data_objs = test_dataset.get_all_objects(sample_idx)
-
-        for obj_idx, data in enumerate(data_objs):
+        for sample_idx in range(len(test_dataset)):
 
             torch.cuda.empty_cache()
 
-            data, intrinsics = data
-            cam_fx, cam_fy, cam_cx, cam_cy = intrinsics
+            print("processing sample", sample_idx)
 
-            data = [torch.unsqueeze(d, 0) for d in data]
+            img_filename = '{0}/{1}-color.png'.format(test_dataset.root, test_dataset.list[sample_idx])
+            color_img = cv2.imread(img_filename)
 
-            points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = data
-            
+            data_objs = test_dataset.get_all_objects(sample_idx)
 
-            points, choose, img, front_r, rot_bins, front_orig, t, model_points, idx = Variable(points).cuda(), \
-                                                                Variable(choose).cuda(), \
-                                                                Variable(img).cuda(), \
-                                                                Variable(front_r).cuda(), \
-                                                                Variable(rot_bins).cuda(), \
-                                                                Variable(front_orig).cuda(), \
-                                                                Variable(t).cuda(), \
-                                                                Variable(model_points).cuda(), \
-                                                                Variable(idx).cuda()
+            for obj_idx, data in enumerate(data_objs):
 
-            #pred_front and pred_t are now absolute positions for front and center keypoint
-            pred_front, pred_rot_bins, pred_t, emb = estimator(img, points, choose, idx)
-            loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t)
-            
-            #vote clustering
-            radius = 0.08
-            ms = MeanShiftTorch(bandwidth=radius)
+                torch.cuda.empty_cache()
 
-            #batch size = 1 always
-            my_front, front_labels = ms.fit(pred_front.squeeze(0))
-            my_t, t_labels = ms.fit(pred_t.squeeze(0))
+                data, intrinsics = data
+                cam_fx, cam_fy, cam_cx, cam_cy = intrinsics
 
-            #theta vote clustering
-            theta_radius = 15 / 180 * np.pi #15 degrees
-            ms_theta = MeanShiftTorch(bandwidth=theta_radius)
+                data = [torch.unsqueeze(d, 0) for d in data]
 
-            pred_thetas = (torch.argmax(pred_rot_bins.squeeze(0), dim=1) / opt.num_rot_bins * 2 * np.pi).unsqueeze(-1)
+                points, choose, img, front_r, rot_bins, front_orig, t, model_points, target, idx = data
+                
 
-            my_theta, theta_labels = ms_theta.fit(pred_thetas)
+                points, choose, img, front_r, rot_bins, front_orig, t, model_points, target, idx = Variable(points).cuda(), \
+                                                                    Variable(choose).cuda(), \
+                                                                    Variable(img).cuda(), \
+                                                                    Variable(front_r).cuda(), \
+                                                                    Variable(rot_bins).cuda(), \
+                                                                    Variable(front_orig).cuda(), \
+                                                                    Variable(t).cuda(), \
+                                                                    Variable(model_points).cuda(), \
+                                                                    Variable(target).cuda(), \
+                                                                    Variable(idx).cuda()
 
-            #switch to vector from center of object
-            my_front -= my_t
+                #pred_front and pred_t are now absolute positions for front and center keypoint
+                pred_front, pred_rot_bins, pred_t, emb = estimator(img, points, choose, idx)
+                loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t)
+                
+                #vote clustering
+                radius = 0.08
+                ms = MeanShiftTorch(bandwidth=radius)
 
-            gt_theta = torch.argmax(rot_bins) / opt.num_rot_bins * 2 * np.pi
+                #batch size = 1 always
+                my_front, front_labels = ms.fit(pred_front.squeeze(0))
+                my_t, t_labels = ms.fit(pred_t.squeeze(0))
 
-            pts = get_model_points(model_points, front_orig, my_front, my_theta, my_t)
-            projected_pts = project_points(pts, cam_fx, cam_fy, cam_cx, cam_cy)
+                #theta vote clustering
+                theta_radius = 15 / 180 * np.pi #15 degrees
+                ms_theta = MeanShiftTorch(bandwidth=theta_radius)
 
-            r, g, b = colors[obj_idx % len(colors)]
+                pred_thetas = (torch.argmax(pred_rot_bins.squeeze(0), dim=1) / opt.num_rot_bins * 2 * np.pi).unsqueeze(-1)
 
-            for (x, y) in projected_pts:
-                color_img = cv2.circle(color_img, (int(x), int(y)), radius=1, color=(b,g,r), thickness=-1)
+                my_theta, theta_labels = ms_theta.fit(pred_thetas)
+
+                #switch to vector from center of object
+                my_front -= my_t
+
+                gt_theta = torch.argmax(rot_bins) / opt.num_rot_bins * 2 * np.pi
+
+                pts = get_model_points(model_points, front_orig, my_front, my_theta, my_t)
+                projected_pts = project_points(pts, cam_fx, cam_fy, cam_cx, cam_cy)
+
+                r, g, b = colors[obj_idx % len(colors)]
+
+                for (x, y) in projected_pts:
+                    color_img = cv2.circle(color_img, (int(x), int(y)), radius=1, color=(b,g,r), thickness=-1)
 
 
 
-        output_filename = '{0}/{1}.png'.format(opt.output, sample_idx)
-        cv2.imwrite(output_filename, color_img)
+            output_filename = '{0}/{1}.png'.format(opt.output, sample_idx)
+            cv2.imwrite(output_filename, color_img)
 
 
 

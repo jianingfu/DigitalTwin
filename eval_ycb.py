@@ -1,14 +1,15 @@
+# --------------------------------------------------------
+# DenseFusion 6D Object Pose Estimation by Iterative Dense Fusion
+# Licensed under The MIT License [see LICENSE for details]
+# Written by Chen
+# --------------------------------------------------------
+
 import _init_paths
 import argparse
 import os
-import copy
 import random
+import time
 import numpy as np
-from PIL import Image
-import scipy.io as scio
-import scipy.misc
-import numpy.ma as ma
-import math
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -18,224 +19,238 @@ import torch.utils.data
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
-import torch.nn.functional as F
 from torch.autograd import Variable
-from datasets.ycb.dataset import PoseDataset
-from lib.network import PoseNet, PoseRefineNet
-from lib.transformations import euler_matrix, quaternion_matrix, quaternion_from_matrix
+from datasets.ycb.dataset import PoseDataset as PoseDataset_ycb
+from datasets.linemod.dataset import PoseDataset as PoseDataset_linemod
+from lib.network import PoseNet
+from lib.loss import Loss
+from lib.meanshift_pytorch import MeanShiftTorch
+from PIL import Image
+import cv2
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--dataset_root', type=str, default = '', help='dataset root dir')
-parser.add_argument('--model', type=str, default = '',  help='resume PoseNet model')
-parser.add_argument('--refine_model', type=str, default = '',  help='resume PoseRefineNet model')
-opt = parser.parse_args()
+from lib.transformations import rotation_matrix_from_vectors_procedure, rotation_matrix_of_axis_angle
 
-norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-border_list = [-1, 40, 80, 120, 160, 200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600, 640, 680]
-xmap = np.array([[j for i in range(640)] for j in range(480)])
-ymap = np.array([[i for i in range(640)] for j in range(480)])
-cam_cx = 312.9869
-cam_cy = 241.3109
-cam_fx = 1066.778
-cam_fy = 1067.487
-cam_scale = 10000.0
-num_obj = 21
-img_width = 480
-img_length = 640
-num_points = 1000
-num_points_mesh = 500
-iteration = 2
-bs = 1
-dataset_config_dir = 'datasets/ycb/dataset_config'
-ycb_toolbox_dir = 'YCB_Video_toolbox'
-result_wo_refine_dir = 'experiments/eval_result/ycb/Densefusion_wo_refine_result'
-result_refine_dir = 'experiments/eval_result/ycb/Densefusion_iterative_result'
+import open3d as o3d
 
-def get_bbox(posecnn_rois):
-    rmin = int(posecnn_rois[idx][3]) + 1
-    rmax = int(posecnn_rois[idx][5]) - 1
-    cmin = int(posecnn_rois[idx][2]) + 1
-    cmax = int(posecnn_rois[idx][4]) - 1
-    r_b = rmax - rmin
-    for tt in range(len(border_list)):
-        if r_b > border_list[tt] and r_b < border_list[tt + 1]:
-            r_b = border_list[tt + 1]
-            break
-    c_b = cmax - cmin
-    for tt in range(len(border_list)):
-        if c_b > border_list[tt] and c_b < border_list[tt + 1]:
-            c_b = border_list[tt + 1]
-            break
-    center = [int((rmin + rmax) / 2), int((cmin + cmax) / 2)]
-    rmin = center[0] - int(r_b / 2)
-    rmax = center[0] + int(r_b / 2)
-    cmin = center[1] - int(c_b / 2)
-    cmax = center[1] + int(c_b / 2)
-    if rmin < 0:
-        delt = -rmin
-        rmin = 0
-        rmax += delt
-    if cmin < 0:
-        delt = -cmin
-        cmin = 0
-        cmax += delt
-    if rmax > img_width:
-        delt = rmax - img_width
-        rmax = img_width
-        rmin -= delt
-    if cmax > img_length:
-        delt = cmax - img_length
-        cmax = img_length
-        cmin -= delt
-    return rmin, rmax, cmin, cmax
+from knn_cuda import KNN
 
-estimator = PoseNet(num_points = num_points, num_obj = num_obj)
-estimator.cuda()
-estimator.load_state_dict(torch.load(opt.model))
-estimator.eval()
+from collections import defaultdict
 
-refiner = PoseRefineNet(num_points = num_points, num_obj = num_obj)
-refiner.cuda()
-refiner.load_state_dict(torch.load(opt.refine_model))
-refiner.eval()
+def dist2(x, y):
+    nx, dimx = x.shape
+    ny, dimy = y.shape
+    assert(dimx == dimy)
 
-testlist = []
-input_file = open('{0}/test_data_list.txt'.format(dataset_config_dir))
-while 1:
-    input_line = input_file.readline()
-    if not input_line:
-        break
-    if input_line[-1:] == '\n':
-        input_line = input_line[:-1]
-    testlist.append(input_line)
-input_file.close()
-print(len(testlist))
+    return (np.ones((ny, 1)) * np.sum((x**2).T, axis=0)).T + \
+        np.ones((nx, 1)) * np.sum((y**2).T, axis=0) - \
+        2 * np.inner(x, y)
 
-class_file = open('{0}/classes.txt'.format(dataset_config_dir))
-class_id = 1
-cld = {}
-while 1:
-    class_input = class_file.readline()
-    if not class_input:
-        break
-    class_input = class_input[:-1]
+def get_model_points(model_points, front_orig, front, angle, t):
 
-    input_file = open('{0}/models/{1}/points.xyz'.format(opt.dataset_root, class_input))
-    cld[class_id] = []
-    while 1:
-        input_line = input_file.readline()
-        if not input_line:
-            break
-        input_line = input_line[:-1]
-        input_line = input_line.split(' ')
-        cld[class_id].append([float(input_line[0]), float(input_line[1]), float(input_line[2])])
-    input_file.close()
-    cld[class_id] = np.array(cld[class_id])
-    class_id += 1
+    model_points = model_points.cpu().detach().numpy()
+    front_orig = front_orig.cpu().detach().numpy().squeeze()
+    front = front.cpu().detach().numpy()
+    angle = angle.cpu().detach().numpy()
+    t = t.cpu().detach().numpy()
 
-for now in range(0, 2949):
-    img = Image.open('{0}/{1}-color.png'.format(opt.dataset_root, testlist[now]))
-    depth = np.array(Image.open('{0}/{1}-depth.png'.format(opt.dataset_root, testlist[now])))
-    posecnn_meta = scio.loadmat('{0}/results_PoseCNN_RSS2018/{1}.mat'.format(ycb_toolbox_dir, '%06d' % now))
-    label = np.array(posecnn_meta['labels'])
-    posecnn_rois = np.array(posecnn_meta['rois'])
+    Rf = rotation_matrix_from_vectors_procedure(front_orig, front)
 
-    lst = posecnn_rois[:, 1:2].flatten()
-    my_result_wo_refine = []
-    my_result = []
+    R_axis = rotation_matrix_of_axis_angle(front, angle)
+
+    R_tot = (R_axis @ Rf)
+
+    pts = (model_points @ R_tot.T + t).squeeze()
+
+    return pts
+
+def visualize_pointcloud(points, label):
+
+    points = points.cpu().detach().numpy()
+
+    points = points.reshape((-1, 3))
+
+    pcld = o3d.geometry.PointCloud()
+    points = o3d.utility.Vector3dVector(points)
+
+    pcld.points = points
+
+    o3d.io.write_point_cloud(label + ".ply", pcld)
+
+def cal_auc(add_dis):
+        max_dis = 0.1
+        D = np.array(add_dis)
+        D[np.where(D > max_dis)] = np.inf;
+        D = np.sort(D)
+        n = len(add_dis)
+        acc = np.cumsum(np.ones((1,n)), dtype=np.float32) / n
+        aps = VOCap(D, acc)
+        return aps * 100
+
+def VOCap(rec, prec):
+    idx = np.where(rec != np.inf)
+    if len(idx[0]) == 0:
+        return 0
+    rec = rec[idx]
+    prec = prec[idx]
+    mrec = np.array([0.0]+list(rec)+[0.1])
+    mpre = np.array([0.0]+list(prec)+[prec[-1]])
+    for i in range(1, prec.shape[0]):
+        mpre[i] = max(mpre[i], mpre[i-1])
+    i = np.where(mrec[1:] != mrec[0:-1])[0] + 1
+    ap = np.sum((mrec[i] - mrec[i-1]) * mpre[i]) * 10
+    return ap
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
+    parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
+    parser.add_argument('--model', type=str, default = '',  help='PoseNet model')
+    parser.add_argument('--output', type=str, default = 'visualization', help='where to dump output')
+
+    parser.add_argument('--num_rot_bins', type=int, default = 36, help='number of bins discretizing the rotation around front')
+    parser.add_argument('--num_visualized', type=int, default = 5, help='number of training samples to visualize')
+    parser.add_argument('--image_size', type=int, default=300, help="square side length of cropped image")
+    parser.add_argument('--append_depth_to_image', action="store_true", default=False, help='put XYZ of pixel into image')
+
+    opt = parser.parse_args()
+
+    if not os.path.isdir(opt.output):
+        os.mkdir(opt.output)
+
+    opt.manualSeed = random.randint(1, 10000)
+    random.seed(opt.manualSeed)
+    torch.manual_seed(opt.manualSeed)
+
+    if opt.dataset == 'ycb':
+        opt.num_objects = 21 #number of object classes in the dataset
+        opt.num_points = 1000 #number of points on the input pointcloud
+        opt.outf = 'trained_models/ycb' #folder to save trained models
+    else:
+        print('ONLY YCB')
+        exit(-1)
+
     
-    for idx in range(len(lst)):
-        itemid = lst[idx]
-        try:
-            rmin, rmax, cmin, cmax = get_bbox(posecnn_rois)
+    if opt.model != '':
+        num_image_channels = 3
+        if opt.append_depth_to_image:
+            num_image_channels += 3
 
-            mask_depth = ma.getmaskarray(ma.masked_not_equal(depth, 0))
-            mask_label = ma.getmaskarray(ma.masked_equal(label, itemid))
-            mask = mask_label * mask_depth
+        estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects, num_rot_bins = opt.num_rot_bins, num_image_channels=num_image_channels)
+        estimator.cuda()
+        #estimator = nn.DataParallel(estimator)
+        estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.model)))
+    else:
+        raise Exception("this is visualizer code, pls pass in a model lol")
 
-            choose = mask[rmin:rmax, cmin:cmax].flatten().nonzero()[0]
-            if len(choose) > num_points:
-                c_mask = np.zeros(len(choose), dtype=int)
-                c_mask[:num_points] = 1
-                np.random.shuffle(c_mask)
-                choose = choose[c_mask.nonzero()]
-            else:
-                choose = np.pad(choose, (0, num_points - len(choose)), 'wrap')
+    test_dataset = PoseDataset_ycb('test', opt.num_points, False, opt.dataset_root, 0.0, opt.num_rot_bins, opt.image_size, append_depth_to_image=opt.append_depth_to_image)
+    
+    opt.sym_list = test_dataset.get_sym_list()
+    opt.num_points_mesh = test_dataset.get_num_points_mesh()
 
-            depth_masked = depth[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
-            xmap_masked = xmap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
-            ymap_masked = ymap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
-            choose = np.array([choose])
+    print('>>>>>>>>----------Dataset loaded!---------<<<<<<<<\nlength of the testing set: {0}\nnumber of sample points on mesh: {1}\nsymmetry object list: {2}'.format(len(test_dataset), opt.num_points_mesh, opt.sym_list))
 
-            pt2 = depth_masked / cam_scale
-            pt0 = (ymap_masked - cam_cx) * pt2 / cam_fx
-            pt1 = (xmap_masked - cam_cy) * pt2 / cam_fy
-            cloud = np.concatenate((pt0, pt1, pt2), axis=1)
+    criterion = Loss(opt.num_rot_bins)
 
-            img_masked = np.array(img)[:, :, :3]
-            img_masked = np.transpose(img_masked, (2, 0, 1))
-            img_masked = img_masked[:, rmin:rmax, cmin:cmax]
+    estimator.eval()
 
-            cloud = torch.from_numpy(cloud.astype(np.float32))
-            choose = torch.LongTensor(choose.astype(np.int32))
-            img_masked = norm(torch.from_numpy(img_masked.astype(np.float32)))
-            index = torch.LongTensor([itemid - 1])
+    adds = defaultdict(list)
 
-            cloud = Variable(cloud).cuda()
-            choose = Variable(choose).cuda()
-            img_masked = Variable(img_masked).cuda()
-            index = Variable(index).cuda()
+    knn = KNN(k=1, transpose_mode=True)
 
-            cloud = cloud.view(1, num_points, 3)
-            img_masked = img_masked.view(1, 3, img_masked.size()[1], img_masked.size()[2])
+    with torch.no_grad():
 
-            pred_r, pred_t, pred_c, emb = estimator(img_masked, cloud, choose, index)
-            pred_r = pred_r / torch.norm(pred_r, dim=2).view(1, num_points, 1)
+        for sample_idx in range(len(test_dataset)):
 
-            pred_c = pred_c.view(bs, num_points)
-            how_max, which_max = torch.max(pred_c, 1)
-            pred_t = pred_t.view(bs * num_points, 1, 3)
-            points = cloud.view(bs * num_points, 1, 3)
+            torch.cuda.empty_cache()
 
-            my_r = pred_r[0][which_max[0]].view(-1).cpu().data.numpy()
-            my_t = (points + pred_t)[which_max[0]].view(-1).cpu().data.numpy()
-            my_pred = np.append(my_r, my_t)
-            my_result_wo_refine.append(my_pred.tolist())
+            print("processing sample", sample_idx)
 
-            for ite in range(0, iteration):
-                T = Variable(torch.from_numpy(my_t.astype(np.float32))).cuda().view(1, 3).repeat(num_points, 1).contiguous().view(1, num_points, 3)
-                my_mat = quaternion_matrix(my_r)
-                R = Variable(torch.from_numpy(my_mat[:3, :3].astype(np.float32))).cuda().view(1, 3, 3)
-                my_mat[0:3, 3] = my_t
+            data_objs = test_dataset.get_all_objects(sample_idx)
+
+            for obj_idx, data in enumerate(data_objs):
+
+                torch.cuda.empty_cache()
+
+                data, intrinsics = data
+                cam_fx, cam_fy, cam_cx, cam_cy = intrinsics
+
+                data = [torch.unsqueeze(d, 0) for d in data]
+
+                points, choose, img, front_r, rot_bins, front_orig, t, model_points, target, idx = data
                 
-                new_cloud = torch.bmm((cloud - T), R).contiguous()
-                pred_r, pred_t = refiner(new_cloud, emb, index)
-                pred_r = pred_r.view(1, 1, -1)
-                pred_r = pred_r / (torch.norm(pred_r, dim=2).view(1, 1, 1))
-                my_r_2 = pred_r.view(-1).cpu().data.numpy()
-                my_t_2 = pred_t.view(-1).cpu().data.numpy()
-                my_mat_2 = quaternion_matrix(my_r_2)
 
-                my_mat_2[0:3, 3] = my_t_2
+                points, choose, img, front_r, rot_bins, front_orig, t, model_points, target, idx = Variable(points).cuda(), \
+                                                                    Variable(choose).cuda(), \
+                                                                    Variable(img).cuda(), \
+                                                                    Variable(front_r).cuda(), \
+                                                                    Variable(rot_bins).cuda(), \
+                                                                    Variable(front_orig).cuda(), \
+                                                                    Variable(t).cuda(), \
+                                                                    Variable(model_points).cuda(), \
+                                                                    Variable(target).cuda(), \
+                                                                    Variable(idx).cuda()
 
-                my_mat_final = np.dot(my_mat, my_mat_2)
-                my_r_final = copy.deepcopy(my_mat_final)
-                my_r_final[0:3, 3] = 0
-                my_r_final = quaternion_from_matrix(my_r_final, True)
-                my_t_final = np.array([my_mat_final[0][3], my_mat_final[1][3], my_mat_final[2][3]])
+                #pred_front and pred_t are now absolute positions for front and center keypoint
+                pred_front, pred_rot_bins, pred_t, emb = estimator(img, points, choose, idx)
+                loss = criterion(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, t)
+                
+                #vote clustering
+                radius = 0.08
+                ms = MeanShiftTorch(bandwidth=radius)
 
-                my_pred = np.append(my_r_final, my_t_final)
-                my_r = my_r_final
-                my_t = my_t_final
+                #batch size = 1 always
+                my_front, front_labels = ms.fit(pred_front.squeeze(0))
+                my_t, t_labels = ms.fit(pred_t.squeeze(0))
 
-            # Here 'my_pred' is the final pose estimation result after refinement ('my_r': quaternion, 'my_t': translation)
+                #theta vote clustering
+                theta_radius = 15 / 180 * np.pi #15 degrees
+                ms_theta = MeanShiftTorch(bandwidth=theta_radius)
 
-            my_result.append(my_pred.tolist())
-        except ZeroDivisionError:
-            print("PoseCNN Detector Lost {0} at No.{1} keyframe".format(itemid, now))
-            my_result_wo_refine.append([0.0 for i in range(7)])
-            my_result.append([0.0 for i in range(7)])
+                pred_thetas = (torch.argmax(pred_rot_bins.squeeze(0), dim=1) / opt.num_rot_bins * 2 * np.pi).unsqueeze(-1)
 
-    scio.savemat('{0}/{1}.mat'.format(result_wo_refine_dir, '%04d' % now), {'poses':my_result_wo_refine})
-    scio.savemat('{0}/{1}.mat'.format(result_refine_dir, '%04d' % now), {'poses':my_result})
-    print("Finish No.{0} keyframe".format(now))
+                my_theta, theta_labels = ms_theta.fit(pred_thetas)
+
+                #switch to vector from center of object
+                my_front -= my_t
+
+                gt_theta = torch.argmax(rot_bins) / opt.num_rot_bins * 2 * np.pi
+
+                pts = get_model_points(model_points, front_orig, my_front, gt_theta, my_t)
+                pts = torch.from_numpy(pts.astype(np.float32)).unsqueeze(0).cuda()
+
+                dists, inds = knn(pts, target)
+                dist = torch.mean(dists).detach().cpu().item()
+                idx = idx.detach().cpu().item()
+
+                print("idx, adds", idx, dist)
+
+                adds[idx].append(dist)
+
+                for d in data:
+                    del d
+
+                del pts
+                del pred_front
+                del rot_bins
+                del pred_t
+                del emb
+                del loss
+                del my_front
+                del my_t
+                del ms
+                del ms_theta
+                del my_theta
+                del gt_theta
+
+
+        adds_aucs = {}
+
+        for idx, dists in adds.items():
+            adds_aucs[idx] = cal_auc(dists)
+
+        print(adds_aucs)
+
+
+
+if __name__ == '__main__':
+    main()
