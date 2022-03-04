@@ -218,7 +218,7 @@ def main():
                 pts = get_model_points(model_points, front_orig, my_front, gt_theta, my_t)
                 pts = torch.from_numpy(pts.astype(np.float32)).unsqueeze(0).cuda()
 
-                dists, inds = knn(pts, target)
+                dists, inds = knn(target, pts)
                 dist = torch.mean(dists).detach().cpu().item()
                 idx = idx.detach().cpu().item()
 

@@ -75,7 +75,6 @@ def main():
     parser.add_argument('--output', type=str, default = 'visualization', help='where to dump output')
 
     parser.add_argument('--num_rot_bins', type=int, default = 36, help='number of bins discretizing the rotation around front')
-    parser.add_argument('--num_visualized', type=int, default = 5, help='number of training samples to visualize')
     parser.add_argument('--image_size', type=int, default=300, help="square side length of cropped image")
     parser.add_argument('--append_depth_to_image', action="store_true", default=False, help='put XYZ of pixel into image')
 
