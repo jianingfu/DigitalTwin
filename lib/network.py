@@ -37,9 +37,14 @@ class ModifiedResnet(nn.Module):
         return x
 
 class PoseNetFeat(nn.Module):
-    def __init__(self, num_points):
+    def __init__(self, num_points, use_normals):
         super(PoseNetFeat, self).__init__()
-        self.conv1 = torch.nn.Conv1d(3, 64, 1)
+
+        pcld_dim = 3
+        if use_normals:
+            pcld_dim += 3
+
+        self.conv1 = torch.nn.Conv1d(pcld_dim, 64, 1)
         #self.bn1 = torch.nn.BatchNorm1d(64)
         self.conv2 = torch.nn.Conv1d(64, 128, 1)
         #self.bn2 = torch.nn.BatchNorm1d(128)
@@ -92,103 +97,88 @@ class PoseNetFeat(nn.Module):
         return torch.cat([pointfeat_1, pointfeat_2, ap_x], 1) #128 + 256 + 1024
 
 class PoseNet(nn.Module):
-    def __init__(self, num_points, num_obj, num_rot_bins):
+    def __init__(self, num_points, num_obj, use_normals):
         super(PoseNet, self).__init__()
         self.num_points = num_points
         self.cnn = ModifiedResnet()
-        self.feat = PoseNetFeat(num_points)
-        
+        self.feat = PoseNetFeat(num_points, use_normals)
 
-        self.conv1_front = torch.nn.Conv1d(1408, 1280, 1)
-        self.conv1_rot_bins = torch.nn.Conv1d(1408, 1280, 1)
-        self.conv1_t = torch.nn.Conv1d(1408, 1280, 1)
-        self.conv1_c = torch.nn.Conv1d(1408, 1280, 1)
+        self.conv1_r = torch.nn.Conv1d(1408, 640, 1)
+        self.conv1_t = torch.nn.Conv1d(1408, 640, 1)
+        self.conv1_c = torch.nn.Conv1d(1408, 640, 1)
 
-        self.conv2_front = torch.nn.Conv1d(1280, 640, 1)
-        self.conv2_rot_bins = torch.nn.Conv1d(1280, 640, 1)
-        self.conv2_t = torch.nn.Conv1d(1280, 640, 1)
-        self.conv2_c = torch.nn.Conv1d(1280, 640, 1)
+        self.conv2_r = torch.nn.Conv1d(640, 256, 1)
+        self.conv2_t = torch.nn.Conv1d(640, 256, 1)
+        self.conv2_c = torch.nn.Conv1d(640, 256, 1)
 
-        self.conv3_front = torch.nn.Conv1d(640, 256, 1)
-        self.conv3_rot_bins = torch.nn.Conv1d(640, 256, 1)
-        self.conv3_t = torch.nn.Conv1d(640, 256, 1)
-        self.conv3_c = torch.nn.Conv1d(640, 256, 1)
+        self.conv3_r = torch.nn.Conv1d(256, 128, 1)
+        self.conv3_t = torch.nn.Conv1d(256, 128, 1)
+        self.conv3_c = torch.nn.Conv1d(256, 128, 1)
 
-        self.conv4_front = torch.nn.Conv1d(256, 128, 1)
-        self.conv4_rot_bins = torch.nn.Conv1d(256, 128, 1)
-        self.conv4_t = torch.nn.Conv1d(256, 128, 1)
-        self.conv4_c = torch.nn.Conv1d(256, 128, 1)
-
-        self.conv5_front = torch.nn.Conv1d(128, num_obj*3, 1) #front axis #63
-        self.conv5_rot_bins = torch.nn.Conv1d(128, num_obj*num_rot_bins, 1) #rotation bins around front axis #3780
-        self.conv5_t = torch.nn.Conv1d(128, num_obj*3, 1) #translation #63
-        self.conv5_c = torch.nn.Conv1d(128, num_obj*1, 1) #confidence #21
-
+        self.conv4_r = torch.nn.Conv1d(128, num_obj*6, 1) #6d rot
+        self.conv4_t = torch.nn.Conv1d(128, num_obj*3, 1) #translation
+        self.conv4_c = torch.nn.Conv1d(128, num_obj*1, 1) #confidence
 
         self.num_obj = num_obj
-        self.num_rot_bins = num_rot_bins
 
     def forward(self, img, x, choose, obj):
+
         out_img = self.cnn(img)
-        
+
         bs, di, _, _ = out_img.size()
 
         emb = out_img.view(bs, di, -1)
         choose = choose.repeat(1, di, 1)
         emb = torch.gather(emb, 2, choose).contiguous()
-        
+
         x = x.transpose(2, 1).contiguous()
 
         #x is pointcloud
         #emb is cnn embedding
         ap_x = self.feat(x, emb)
 
-        fx = F.relu(self.conv1_front(ap_x))
-        rx = F.relu(self.conv1_rot_bins(ap_x))
+        rx = F.relu(self.conv1_r(ap_x))
         tx = F.relu(self.conv1_t(ap_x))
-        cx = F.relu(self.conv1_c(ap_x))      
+        cx = F.relu(self.conv1_c(ap_x))
 
-        fx = F.relu(self.conv2_front(fx))
-        rx = F.relu(self.conv2_rot_bins(rx))
+        rx = F.relu(self.conv2_r(rx))
         tx = F.relu(self.conv2_t(tx))
         cx = F.relu(self.conv2_c(cx))
 
-        fx = F.relu(self.conv3_front(fx))
-        rx = F.relu(self.conv3_rot_bins(rx))
+        rx = F.relu(self.conv3_r(rx))
         tx = F.relu(self.conv3_t(tx))
         cx = F.relu(self.conv3_c(cx))
 
+        rx = self.conv4_r(rx).view(bs, self.num_obj, 6, self.num_points)
+        tx = self.conv4_t(tx).view(bs, self.num_obj, 3, self.num_points)
+        cx = torch.sigmoid(self.conv4_c(cx)).view(bs, self.num_obj, 1, self.num_points)
 
-        fx = F.relu(self.conv4_front(fx))
-        rx = F.relu(self.conv4_rot_bins(rx))
-        tx = F.relu(self.conv4_t(tx))
-        cx = F.relu(self.conv4_c(cx))
+        obj = obj.unsqueeze(-1).unsqueeze(-1)
+        obj_rx = obj.repeat(1, 1, rx.shape[2], rx.shape[3])
+        obj_tx = obj.repeat(1, 1, tx.shape[2], tx.shape[3])
+        obj_cx = obj.repeat(1, 1, cx.shape[2], cx.shape[3])
 
-        fx = self.conv5_front(fx).view(bs, self.num_obj, 3, self.num_points)
-        rx = self.conv5_rot_bins(rx).view(bs, self.num_obj, self.num_rot_bins, self.num_points)
-        tx = self.conv5_t(tx).view(bs, self.num_obj, 3, self.num_points)
-        cx = torch.sigmoid(self.conv5_c(cx)).view(bs, self.num_obj, 1, self.num_points)
+        out_rx = torch.gather(rx, 1, obj_rx)[:,0,:,:]
+        out_tx = torch.gather(tx, 1, obj_tx)[:,0,:,:]
+        out_cx = torch.gather(cx, 1, obj_cx)[:,0,:,:]
 
-        
-        b = 0
-        out_fx = torch.index_select(fx[b], 0, obj[b])
-        out_rx = torch.index_select(rx[b], 0, obj[b])
-        out_tx = torch.index_select(tx[b], 0, obj[b])
-        out_cx = torch.index_select(cx[b], 0, obj[b])
-
-        out_fx = out_fx.contiguous().transpose(2, 1).contiguous()
         out_rx = out_rx.contiguous().transpose(2, 1).contiguous()
-        out_cx = out_cx.contiguous().transpose(2, 1).contiguous()
         out_tx = out_tx.contiguous().transpose(2, 1).contiguous()
-        
-        return out_fx, out_rx, out_tx, out_cx, emb.detach()
- 
+        out_cx = out_cx.contiguous().transpose(2, 1).contiguous()
+
+        return out_rx, out_tx, out_cx, emb.detach()
+
 
 
 class PoseRefineNetFeat(nn.Module):
-    def __init__(self, num_points):
+    def __init__(self, num_points, use_normals):
         super(PoseRefineNetFeat, self).__init__()
-        self.conv1 = torch.nn.Conv1d(3, 64, 1)
+
+        pcld_dim = 3
+        if use_normals:
+            pcld_dim += 3
+
+        self.conv1 = torch.nn.Conv1d(pcld_dim, 64, 1)
         self.conv2 = torch.nn.Conv1d(64, 128, 1)
 
         self.e_conv1 = torch.nn.Conv1d(32, 64, 1)
@@ -220,51 +210,47 @@ class PoseRefineNetFeat(nn.Module):
         return ap_x
 
 class PoseRefineNet(nn.Module):
-    def __init__(self, num_points, num_obj, num_rot_bins):
+    def __init__(self, num_points, num_obj, use_normals):
         super(PoseRefineNet, self).__init__()
         self.num_points = num_points
-        self.feat = PoseRefineNetFeat(num_points)
-        
-        self.conv1_front = torch.nn.Linear(1024, 512)
-        self.conv1_rot_bins = torch.nn.Linear(1024, 512)
+        self.feat = PoseRefineNetFeat(num_points, use_normals)
+
+        self.conv1_r = torch.nn.Linear(1024, 512)
         self.conv1_t = torch.nn.Linear(1024, 512)
 
-        self.conv2_front = torch.nn.Linear(512, 128)
-        self.conv2_rot_bins = torch.nn.Linear(512, 128)
+        self.conv2_r = torch.nn.Linear(512, 128)
         self.conv2_t = torch.nn.Linear(512, 128)
 
-        
-        self.conv3_front = torch.nn.Linear(128, num_obj*3) #front axes
-        self.conv3_rot_bins = torch.nn.Linear(128, num_obj*num_rot_bins) #discretized rotation
-
+        self.conv3_r = torch.nn.Linear(128, num_obj*6) #6d rot
         self.conv3_t = torch.nn.Linear(128, num_obj*3) #translation
 
         self.num_obj = num_obj
-        self.num_rot_bins = num_rot_bins
 
     def forward(self, x, emb, obj):
         bs = x.size()[0]
-        
+
         x = x.transpose(2, 1).contiguous()
         ap_x = self.feat(x, emb)
 
-        fx = F.relu(self.conv1_front(ap_x))
-        rx = F.relu(self.conv1_rot_bins(ap_x))
-        tx = F.relu(self.conv1_t(ap_x))   
+        rx = F.relu(self.conv1_r(ap_x))
+        tx = F.relu(self.conv1_t(ap_x))
 
-        fx = F.relu(self.conv2_front(fx))
-        rx = F.relu(self.conv2_rot_bins(rx))
+        rx = F.relu(self.conv2_r(rx))
         tx = F.relu(self.conv2_t(tx))
 
-        fx = self.conv3_front(fx).view(bs, self.num_obj, 3)
-        rx = self.conv3_rot_bins(rx).view(bs, self.num_obj, self.num_rot_bins)
+        rx = self.conv3_r(rx).view(bs, self.num_obj, 6, 1)
+        tx = self.conv3_t(tx).view(bs, self.num_obj, 3, 1)
 
-        tx = self.conv3_t(tx).view(bs, self.num_obj, 3)
+        obj = obj.unsqueeze(-1).unsqueeze(-1)
+        obj_rx = obj.repeat(1, 1, rx.shape[2], rx.shape[3])
+        obj_tx = obj.repeat(1, 1, tx.shape[2], tx.shape[3])
 
-        b = 0
-        out_fx = torch.index_select(fx[b], 0, obj[b])
-        out_rx = torch.index_select(rx[b], 0, obj[b])
-        out_tx = torch.index_select(tx[b], 0, obj[b])
+        out_rx = torch.gather(rx, 1, obj_rx)[:,0,:,:]
+        out_tx = torch.gather(tx, 1, obj_tx)[:,0,:,:]
 
+        out_rx = out_rx.contiguous().transpose(2, 1).contiguous()
+        out_tx = out_tx.contiguous().transpose(2, 1).contiguous()
 
-        return out_fx, out_rx, out_tx
+        #print("shapes!", out_rx.shape, out_tx.shape)
+
+        return out_rx, out_tx

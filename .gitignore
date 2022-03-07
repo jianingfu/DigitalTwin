@@ -17,3 +17,5 @@ datasets/custom/custom_preprocessed/*
 *.ply
 ckpt/
 tb_logs/
+archived_models/*
+datasets/FallingThings/*

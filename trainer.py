@@ -13,14 +13,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default = 'custom', help='ycb or linemod')
 parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
 parser.add_argument('--batch_size', type=int, default = 8, help='batch size')
-parser.add_argument('--workers', type=int, default = 10, help='number of data loading workers')
-parser.add_argument('--lr', default=0.0001, help='learning rate')
+parser.add_argument('--workers', type=int, default = 8, help='number of data loading workers')
+parser.add_argument('--lr', default=0.0015, help='learning rate')
 parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--w', default=0.05, help='pred_c regularization')
 parser.add_argument('--w_rate', default=0.3, help='pred_c regularization decay rate')
-parser.add_argument('--decay_margin', default=0.016, help='margin to decay lr & w')
-parser.add_argument('--refine_margin', default=0.1, help='margin to start the training of iterative refinement')
-parser.add_argument('--noise_trans', default=0.03, help='range of the random noise of translation added to the training data')
+parser.add_argument('--decay_margin', default=0.02, help='margin to decay lr & w')
+parser.add_argument('--refine_margin', default=0.02, help='margin to start the training of iterative refinement')
+parser.add_argument('--refine_epoch', default=15, help='epoch to start the training of iterative refinement')
+parser.add_argument('--noise_trans', default=0.01, help='range of the random noise of translation added to the training data')
 parser.add_argument('--iteration', type=int, default = 2, help='number of refinement iterations')
 parser.add_argument('--nepoch', type=int, default=500, help='max number of epochs to train')
 parser.add_argument('--resume_posenet', type=str, default = 'ckpt/last.ckpt',  help='resume PoseNet model')
@@ -28,8 +29,9 @@ parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume 
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
 parser.add_argument('--visualize', type=bool, default = True, help='visualize using plotly')
 parser.add_argument('--num_rot_bins', type=int, default = 18, help='number of bins discretizing the rotation around front')
-# TODO: lightning has a built in performance profile, set that up!
-parser.add_argument('--profile', action="store_true", default=False, help='should we performance profile?')
+parser.add_argument('--image_size', type=int, default=300, help="square side length of cropped image")
+parser.add_argument('--use_normals', action="store_true", default=False, help="estimate normals and augment pointcloud")
+parser.add_argument('--old_batch_mode', action="store_true", default=False, help="old batch mode, where batch size is 1 and gradients are accumulated")
 
 opt = parser.parse_args()
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
@@ -45,6 +47,7 @@ if __name__ == '__main__':
         opt.outf = 'trained_models/ycb' #folder to save trained models
         opt.log_dir = 'experiments/logs/ycb' #folder to save logs
         opt.repeat_epoch = 1 #number of repeat times for one epoch training
+        opt.image_size = 300
         # init DataModule
         dataModule = YCBDataModule(opt)
     elif opt.dataset == 'linemod':
@@ -52,7 +55,7 @@ if __name__ == '__main__':
         opt.num_points = 500
         opt.outf = 'trained_models/linemod'
         opt.log_dir = 'experiments/logs/linemod'
-        opt.repeat_epoch = 20
+        opt.repeat_epoch = 1
         opt.nepoch = opt.nepoch*opt.repeat_epoch
         # init DataModule
         dataModule = LinemodDataModule(opt)
@@ -70,6 +73,7 @@ if __name__ == '__main__':
 
     if opt.resume_refinenet != '':
         opt.refine_start = True
+        opt.decay_start = True
 
     # init model
     densefusion = DenseFusionModule(opt)

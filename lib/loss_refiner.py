@@ -1,100 +1,133 @@
 from torch.nn.modules.loss import _Loss
 from torch.autograd import Variable
 import torch
+try:
+    from .tools import compute_rotation_matrix_from_ortho6d
+except:
+    from tools import compute_rotation_matrix_from_ortho6d
 import time
 import numpy as np
 import torch.nn as nn
 import random
 import torch.backends.cudnn as cudnn
+from knn_cuda import KNN
 
-from lib.transformations import rotation_matrix_from_vectors, rotation_matrix_of_axis_angle
+from lib.loss_helpers import FRONT_LOSS_COEFF
 
-cross_entropy_loss = nn.CrossEntropyLoss(reduction='none')
+def loss_calculation(pred_r, pred_t, target, target_front, model_points, front, idx, points, num_point_mesh, sym_list, use_normals):
 
-rot_bins_loss_coeff = 1
-front_loss_coeff = 1
-translation_loss_coeff = 4
-
-
-def loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, points, num_rot_bins):
-    
-    pred_front = pred_front.view((1, 1, 3))
-    pred_rot_bins = pred_rot_bins.view((1, 1, num_rot_bins))
-    pred_t = pred_t.view((1, 1, 3))
-
-    bs, num_p, _ = pred_front.size()
+    knn = KNN(k=1, transpose_mode=True)
+    bs, num_p, _ = pred_r.size()
     num_input_points = len(points[0])
-    
-    front_r = front_r.view(bs, 1, 3).repeat(1, bs*num_p, 1)
 
-    pred_rot_bins = pred_rot_bins.view(bs*num_p, num_rot_bins)
-    rot_bins = rot_bins.repeat(bs*num_p, 1)
+    pred_r = pred_r / (torch.norm(pred_r, dim=2).view(bs, num_p, 1))
 
-    #pred_front loss (L2 norm on front vector)
-    pred_front_dis = torch.norm((pred_front - front_r), dim=2)
+    base = compute_rotation_matrix_from_ortho6d(pred_r)
+    base = base.view(bs*num_p, 3, 3)
 
-    #pred_rot loss (cross entropy on bins)
-    pred_rot_loss = cross_entropy_loss(pred_rot_bins, rot_bins).unsqueeze(0).unsqueeze(-1)
 
-    t = t.repeat(1, bs*num_p, 1)
+    # base = torch.cat(((1.0 - 2.0*(pred_r[:, :, 2]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1),\
+    #                   (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] - 2.0*pred_r[:, :, 0]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 3]*pred_r[:, :, 0]).view(bs, num_p, 1), \
+    #                   (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1), \
+    #                   (-2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (-2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+    #                   (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 2]**2)).view(bs, num_p, 1)), dim=2).contiguous().view(bs * num_p, 3, 3)
 
-    #pred_t loss (L2 norm on translation)
-    pred_t_loss = torch.norm((pred_t - t), dim=2).unsqueeze(-1)
+    ori_base = base
+    base = base.contiguous().transpose(2, 1).contiguous()
+    model_points = model_points.view(bs, 1, num_point_mesh, 3).repeat(1, num_p, 1, 1).view(bs * num_p, num_point_mesh, 3)
+    front = front.view(bs, 1, 1, 3).repeat(1, num_p, 1, 1).view(bs * num_p, 1, 3)
 
-    loss = torch.mean(pred_front_dis * front_loss_coeff + pred_rot_loss * rot_bins_loss_coeff + pred_t_loss * translation_loss_coeff)
+    target = target.view(bs, 1, num_point_mesh, 3).repeat(1, num_p, 1, 1).view(bs, num_p, num_point_mesh, 3)
+    target_front = target_front.view(bs, 1, 1, 3).repeat(1, num_p, 1, 1)
 
-    #calculating new model_points for refiner
-    #requires finding highest confidence front and theta and solving for rotation matrix
+    ori_target = target
+    pred_t = pred_t.contiguous().view(bs * num_p, 1, 3)
+    ori_t = pred_t
 
-    pred_t = pred_t[0]
-    points = points.view(1, bs * num_input_points, 3)
 
-    #we need to calculate the actual transformation that our rotation rep. represents
+    #print("shapes before bmm?", model_points.shape, base.shape, points.shape, pred_t.shape)
 
-    pred_front = pred_front.view(bs * num_p, 3)
+    pred = torch.add(torch.bmm(model_points, base), pred_t)
+    pred_front = torch.add(torch.bmm(front, base), pred_t)
 
-    best_c_pred_front = pred_front[0]
-    best_c_rot_bins = pred_rot_bins[0]
+    pred = pred.view(bs, num_p, num_point_mesh, 3)
 
-    front_orig = front_orig.squeeze()
+    #print("loss shapes now before dist calc", pred.shape, target.shape)
 
-    #calculate actual rotation
-    front_orig = front_orig.cpu().detach().numpy()
-    best_c_pred_front = best_c_pred_front.cpu().detach().numpy()
-    best_c_rot_bins = best_c_rot_bins.cpu().detach().numpy()
+    for i in range(len(idx)):
+        if idx[i].item() in sym_list:
 
-    Rf = rotation_matrix_from_vectors(front_orig, best_c_pred_front)
+            my_target = target[i,0,:,:].contiguous().view(1, -1, 3)
+            my_pred = pred[i].contiguous().view(1, -1, 3)
 
-    #get the angle in radians based on highest histogram bin
-    angle = np.argmax(best_c_rot_bins) / best_c_rot_bins.shape[0] * 2 * np.pi
+            dists, inds = knn(my_target, my_pred)
 
-    R_axis = rotation_matrix_of_axis_angle(best_c_pred_front, angle)
+            inds = inds.repeat(1, 1, 3)
 
-    R_tot = (R_axis @ Rf).T
+            my_target = torch.gather(my_target, 1, inds)
+            my_target = my_target.view(num_p, num_point_mesh, 3).contiguous()
+            target[i] = my_target
 
-    R_tot = torch.from_numpy(R_tot.astype(np.float32)).cuda().contiguous().view(bs, 3, 3)
-    pred_t = pred_t.repeat(bs * num_input_points, 1).contiguous().view(1, bs * num_input_points, 3)
+    target = target.detach()
 
-    new_points = torch.bmm((points - pred_t), R_tot).contiguous().detach()
+    #print("shapes before diff", pred.shape, target.shape)
 
-    with torch.no_grad():
-        new_rot_bins = rot_bins[0]
-        new_rot_bins = torch.roll(new_rot_bins, -np.argmax(best_c_rot_bins)).unsqueeze(0)
+    dis = torch.mean(torch.norm((pred - target), dim=3), dim=2)
+    dis_front = torch.mean(torch.norm((pred_front - target_front), dim=3), dim=2)
 
-    with torch.no_grad():
-        new_t = torch.unsqueeze(t[:,0,:] - pred_t[:,0,:], 1)
+    loss = torch.sum(torch.mean(dis + FRONT_LOSS_COEFF * dis_front, dim=1))
 
-    # # print('------------> ', dis[0][which_max[0]].item(), pred_c[0][which_max[0]].item(), idx[0].item())
-    return loss, new_points, new_rot_bins, new_t, pred_front_dis * front_loss_coeff, pred_rot_loss * rot_bins_loss_coeff, pred_t_loss * translation_loss_coeff
+    #print("dis shape", dis.shape)
+
+    dis = dis.view(bs, num_p)
+
+    #print("gotta do this stuff now", ori_t.shape, ori_base.shape, points.shape)
+
+    t = ori_t[:,0]
+
+    if use_normals:
+        points = points.contiguous().view(bs, num_input_points, 6)
+        normals = points[:,:,3:].contiguous()
+        points = points[:,:,:3].contiguous()
+    else:
+        points = points.contiguous().view(bs, num_input_points, 3)
+
+
+    ori_base = ori_base.view(bs, 3, 3).contiguous()
+    ori_t = t.repeat(1, num_input_points, 1).contiguous().view(bs, num_input_points, 3)
+    new_points = torch.bmm((points - ori_t), ori_base).contiguous()
+
+    if use_normals:
+        normals = normals.view(bs, num_input_points, 3)
+        new_normals = torch.bmm((normals - ori_t), ori_base).contiguous()
+        new_points = torch.concat((new_points, new_normals), dim=2)
+
+    new_target = ori_target.view(bs, num_point_mesh, 3).contiguous()
+    ori_t = t.repeat(1, num_point_mesh, 1).contiguous().view(bs, num_point_mesh, 3)
+    new_target = torch.bmm((new_target - ori_t), ori_base).contiguous()
+
+    new_target_front = target_front.view(bs, 1, 3).contiguous()
+    ori_t = t.view(bs, 1, 3)
+    new_target_front = torch.bmm((new_target_front - ori_t), ori_base).contiguous()
+
+    dis = torch.mean(dis)
+
+    # print('------------> ', dis.item(), idx[0].item())
+    del knn
+    return loss, dis, new_points.detach(), new_target.detach(), new_target_front.detach()
 
 
 class Loss_refine(_Loss):
 
-    def __init__(self, num_rot_bins):
+    def __init__(self, num_points_mesh, sym_list, use_normals):
         super(Loss_refine, self).__init__(True)
-        self.num_rot_bins = num_rot_bins
+        self.num_pt_mesh = num_points_mesh
+        self.sym_list = sym_list
+        self.use_normals = use_normals
 
-
-    def forward(self, pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, points):
-        return loss_calculation(pred_front, pred_rot_bins, pred_t, front_r, rot_bins, front_orig, t, idx, points, self.num_rot_bins)
-
+    def forward(self, pred_r, pred_t, target, target_front, model_points, front, idx, points):
+        return loss_calculation(pred_r, pred_t, target, target_front, model_points, front, idx, points, self.num_pt_mesh, self.sym_list, self.use_normals)
