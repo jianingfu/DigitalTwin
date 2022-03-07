@@ -16,7 +16,7 @@ import pdb
 import torch.nn.functional as F
 from lib.pspnet import PSPNet
 from pointnet2.pointnet2_modules import PointnetSAModuleMSG, PointnetFPModule
-from RandLA.RandLANet import Network as RandLANet
+from lib.RandLA.RandLANet import Network as RandLANet
 
 psp_models = {
     'resnet18': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet18'),

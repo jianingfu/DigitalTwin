@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_utils as pt_utils
-from helper_tool import DataProcessing as DP
+from lib.RandLA.helper_tool import DataProcessing as DP
 import numpy as np
 from sklearn.metrics import confusion_matrix
 # Imported from FFB6D https://github.com/ethnhe/FFB6D/tree/master/ffb6d/models/RandLA
@@ -42,7 +42,11 @@ class Network(nn.Module):
 
     def forward(self, end_points):
 
-        features = end_points['features']  # Batch*channel*npoints
+        # features = end_points['features']  # Batch*channel*npoints
+        features = end_points
+        print("feature orig shape ", features.shape)
+        features = np.swapaxes(features, 1, 2)
+        print("feautre swapped shape", features.shape)
         features = self.fc0(features)
 
         features = features.unsqueeze(dim=3)  # Batch*channel*npoints*1
@@ -81,8 +85,10 @@ class Network(nn.Module):
         features = self.fc3(features)
         f_out = features.squeeze(3)
 
-        end_points['logits'] = f_out
-        return end_points
+        print("f out shape ",f_out.shape)
+        # end_points['logits'] = f_out
+        # return end_points
+        return f_out
 
     @staticmethod
     def random_sample(feature, pool_idx):

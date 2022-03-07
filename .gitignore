@@ -18,3 +18,5 @@ datasets/custom/custom_preprocessed
 ckpt/
 tb_logs/
 *.png
+*.egg
+archived_trained_models/*
