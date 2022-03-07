@@ -26,7 +26,7 @@ def loss_calculation(pred_r, pred_t, pred_c, target, target_front, model_points,
 
     base = compute_rotation_matrix_from_ortho6d(pred_r)
     base = base.view(bs*num_p, 3, 3)
-
+    
     # base = torch.cat(((1.0 - 2.0*(pred_r[:, :, 2]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1),\
     #                   (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] - 2.0*pred_r[:, :, 0]*pred_r[:, :, 3]).view(bs, num_p, 1), \
     #                   (2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
@@ -56,7 +56,7 @@ def loss_calculation(pred_r, pred_t, pred_c, target, target_front, model_points,
         points = points[:,:,:3].contiguous()
     else:
         points = points.contiguous().view(bs*num_p, 1, 3)
-
+        
     pred_c = pred_c.contiguous().view(bs, num_p)
 
     pred = torch.add(torch.bmm(model_points, base), points + pred_t)
@@ -80,7 +80,7 @@ def loss_calculation(pred_r, pred_t, pred_c, target, target_front, model_points,
                 my_target = torch.gather(my_target, 1, inds)
 
                 my_target = my_target.view(num_p, num_point_mesh, 3).contiguous()
-
+                
                 target[i] = my_target
 
     target = target.detach()
@@ -89,7 +89,7 @@ def loss_calculation(pred_r, pred_t, pred_c, target, target_front, model_points,
     front_dis = torch.mean(torch.norm((pred_front - target_front), dim=3), dim=2)
 
     loss = torch.sum(torch.mean(((dis + FRONT_LOSS_COEFF * front_dis) * pred_c - w * torch.log(pred_c)), dim=1))
-
+    
     pred_c = pred_c.view(bs, num_p)
     how_max, which_max = torch.max(pred_c, 1)
     dis = dis.view(bs, num_p)

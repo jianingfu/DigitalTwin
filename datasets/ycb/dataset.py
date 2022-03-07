@@ -24,7 +24,7 @@ def standardize_image_size(target_image_size, rmin, rmax, cmin, cmax, image_heig
         diff = height - target_image_size
         rmin += int(diff / 2)
         rmax -= int((diff + 1) / 2)
-
+    
     elif height < target_image_size:
         diff = target_image_size - height
         if rmin - int(diff / 2) < 0:
@@ -34,12 +34,12 @@ def standardize_image_size(target_image_size, rmin, rmax, cmin, cmax, image_heig
         else:
             rmin -= int(diff / 2)
             rmax += int((diff + 1) / 2)
-
+    
     if width > target_image_size:
         diff = width - target_image_size
         cmin += int(diff / 2)
         cmax -= int((diff + 1) / 2)
-
+    
     elif width < target_image_size:
         diff = target_image_size - width
         if cmin - int(diff / 2) < 0:
@@ -49,7 +49,7 @@ def standardize_image_size(target_image_size, rmin, rmax, cmin, cmax, image_heig
         else:
             cmin -= int(diff / 2)
             cmax += int((diff + 1) / 2)
-
+    
     return rmin, rmax, cmin, cmax
 
 def get_random_rotation_around_symmetry_axis(axis, symm_type, num_symm):
@@ -62,7 +62,7 @@ def get_random_rotation_around_symmetry_axis(axis, symm_type, num_symm):
         return rotation_matrix_of_axis_angle(axis, angle).squeeze()
     else:
         raise Exception("Invalid symm_type " + symm_type)
-
+    
 
 class PoseDataset(data.Dataset):
     def __init__(self, mode, num_pt, add_noise, root, noise_trans, refine, image_size=-1, use_normals=False):
@@ -153,7 +153,7 @@ class PoseDataset(data.Dataset):
                 input_file.close()
             else:
                 self.symmd[class_id] = []
-
+            
             class_id += 1
 
         self.cam_cx_1 = 312.9869
@@ -168,7 +168,7 @@ class PoseDataset(data.Dataset):
 
         self.xmap = np.array([[j for i in range(640)] for j in range(480)])
         self.ymap = np.array([[i for i in range(640)] for j in range(480)])
-
+        
         self.trancolor = transforms.ColorJitter(0.2, 0.2, 0.2, 0.05)
         self.noise_img_loc = 0.0
         self.noise_img_scale = 7.0
@@ -209,7 +209,7 @@ class PoseDataset(data.Dataset):
                 f_label = np.array(Image.open('{0}/{1}-label.png'.format(self.root, seed)))
                 front_label = np.unique(f_label).tolist()[1:]
                 if len(front_label) < self.front_num:
-                    continue
+                   continue
                 front_label = random.sample(front_label, self.front_num)
                 for f_i in front_label:
                     mk = ma.getmaskarray(ma.masked_not_equal(f_label, f_i))
@@ -307,7 +307,7 @@ class PoseDataset(data.Dataset):
         if self.add_noise:
             cloud = np.add(cloud, add_t)
 
-
+        
         #NORMALS
         if self.use_normals:
             depth_mm = (depth * (1000 / cam_scale)).astype(np.uint16)
@@ -327,14 +327,14 @@ class PoseDataset(data.Dataset):
             target = np.add(target, target_t + add_t)
         else:
             target = np.add(target, target_t)
-
+            
         target_front = np.dot(front, target_r.T)
 
         if self.add_noise:
             target_front = np.add(target_front, target_t + add_t)
         else:
             target_front = np.add(target_front, target_t)
-
+        
         return torch.from_numpy(cloud.astype(np.float32)), \
                torch.LongTensor(choose.astype(np.int32)), \
                self.norm(torch.from_numpy(img_masked.astype(np.float32))), \
@@ -375,7 +375,7 @@ class PoseDataset(data.Dataset):
                 f_label = np.array(Image.open('{0}/{1}-label.png'.format(self.root, seed)))
                 front_label = np.unique(f_label).tolist()[1:]
                 if len(front_label) < self.front_num:
-                    continue
+                   continue
                 front_label = random.sample(front_label, self.front_num)
                 for f_i in front_label:
                     mk = ma.getmaskarray(ma.masked_not_equal(f_label, f_i))
@@ -447,7 +447,7 @@ class PoseDataset(data.Dataset):
                 choose = choose[c_mask.nonzero()]
             else:
                 choose = np.pad(choose, (0, self.num_pt - len(choose)), 'wrap')
-
+            
             depth_masked = depth[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
             xmap_masked = self.xmap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
             ymap_masked = self.ymap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
@@ -461,12 +461,15 @@ class PoseDataset(data.Dataset):
             if self.add_noise:
                 cloud = np.add(cloud, add_t)
 
+            #NORMALS
+            if self.use_normals:
+                depth_mm = (depth * (1000 / cam_scale)).astype(np.uint16)
+                normals = compute_normals(depth_mm, cam_fx, cam_fy)
+                normals_masked = normals[rmin:rmax, cmin:cmax].reshape((-1, 3))[choose].astype(np.float32).squeeze(0)
+                cloud = np.hstack((cloud, normals_masked))
+
+            #return all model_points (no sampling), for evaluation
             model_points = self.cld[obj[idx]]
-            if self.refine:
-                select_list = np.random.choice(len(model_points), self.num_pt_mesh_large, replace=False) # without replacement, so that it won't choice duplicate points
-            else:
-                select_list = np.random.choice(len(model_points), self.num_pt_mesh_small, replace=False) # without replacement, so that it won't choice duplicate points
-            model_points = model_points[select_list]
 
             target = np.dot(model_points, target_r.T)
             if self.add_noise:
@@ -474,13 +477,13 @@ class PoseDataset(data.Dataset):
             else:
                 target = np.add(target, target_t)
 
-
+            
             data_output.append(([torch.from_numpy(cloud.astype(np.float32)), \
-                                 torch.LongTensor(choose.astype(np.int32)), \
-                                 self.norm(torch.from_numpy(img_masked.astype(np.float32))), \
-                                 torch.from_numpy(target.astype(np.float32)), \
-                                 torch.from_numpy(model_points.astype(np.float32)), \
-                                 torch.LongTensor([int(obj[idx]) - 1])], (cam_fx, cam_fy, cam_cx, cam_cy)))
+                torch.LongTensor(choose.astype(np.int32)), \
+                self.norm(torch.from_numpy(img_masked.astype(np.float32))), \
+                torch.from_numpy(target.astype(np.float32)), \
+                torch.from_numpy(model_points.astype(np.float32)), \
+                torch.LongTensor([int(obj[idx]) - 1])], (cam_fx, cam_fy, cam_cx, cam_cy)))
 
         return data_output
 

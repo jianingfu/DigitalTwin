@@ -34,13 +34,18 @@ class DenseFusionModule(pl.LightningModule):
         self.estimator = PoseNet(num_points=self.opt.num_points, num_obj=self.opt.num_objects, use_normals=self.opt.use_normals)
         self.refiner = PoseRefineNet(num_points=self.opt.num_points, num_obj=self.opt.num_objects, use_normals=self.opt.use_normals)
         self.best_test = np.Inf
-        self.criterion = Loss(self.opt.num_rot_bins, self.opt.sym_list, self.opt.use_normals)
-        self.criterion_refine = Loss_refine(self.opt.num_rot_bins, self.opt.sym_list, self.opt.use_normals)
+        
         if self.opt.old_batch_mode:
             self.automatic_optimization = False
             self.old_batch_size = opt.batch_size
             self.opt.batch_size = 1
             self.opt.image_size = -1
+
+    def on_pretrain_routine_start(self):
+        self.opt.sym_list = self.trainer.datamodule.sym_list
+        self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
+        self.criterion = Loss(self.opt.num_points_mesh, self.opt.sym_list, self.opt.use_normals)
+        self.criterion_refine = Loss_refine(self.opt.num_points_mesh, self.opt.sym_list, self.opt.use_normals)
 
     def on_train_epoch_start(self):
         # TODO: do we need this?
@@ -79,6 +84,7 @@ class DenseFusionModule(pl.LightningModule):
                 opt.zero_grad()
 
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('dis', dis, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     # default check_val_every_n_epoch=1 by lightning
@@ -128,8 +134,8 @@ class DenseFusionModule(pl.LightningModule):
             t_colors = np.concatenate((gt_t_color, pred_t_color, projected_color), axis=1)
             self.logger.experiment.add_mesh(str(self.current_epoch) + 't_vis ', vertices=t_vis, colors=t_colors)
 
-        val_loss = loss.item()
-        self.log('val_loss', val_loss, logger=True)
+        val_loss = dis.item()
+        self.log('val_dis', val_loss, logger=True)
         return val_loss
 
     def validation_epoch_end(self, outputs):

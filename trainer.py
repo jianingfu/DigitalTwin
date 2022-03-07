@@ -10,13 +10,13 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default = 'custom', help='ycb or linemod')
+parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
 parser.add_argument('--dataset_root', type=str, default = 'datasets/ycb/YCB_Video_Dataset', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
 parser.add_argument('--batch_size', type=int, default = 8, help='batch size')
 parser.add_argument('--workers', type=int, default = 8, help='number of data loading workers')
-parser.add_argument('--lr', default=0.0015, help='learning rate')
+parser.add_argument('--lr', default=0.0001, help='learning rate')
 parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
-parser.add_argument('--w', default=0.05, help='pred_c regularization')
+parser.add_argument('--w', default=0.0015, help='pred_c regularization')
 parser.add_argument('--w_rate', default=0.3, help='pred_c regularization decay rate')
 parser.add_argument('--decay_margin', default=0.02, help='margin to decay lr & w')
 parser.add_argument('--refine_margin', default=0.02, help='margin to start the training of iterative refinement')
@@ -24,14 +24,13 @@ parser.add_argument('--refine_epoch', default=15, help='epoch to start the train
 parser.add_argument('--noise_trans', default=0.01, help='range of the random noise of translation added to the training data')
 parser.add_argument('--iteration', type=int, default = 2, help='number of refinement iterations')
 parser.add_argument('--nepoch', type=int, default=500, help='max number of epochs to train')
-parser.add_argument('--resume_posenet', type=str, default = 'ckpt/last.ckpt',  help='resume PoseNet model')
+parser.add_argument('--resume_posenet', type=str, default = '',  help='resume PoseNet model') # ckpt/last.ckpt
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
-parser.add_argument('--visualize', type=bool, default = True, help='visualize using plotly')
-parser.add_argument('--num_rot_bins', type=int, default = 18, help='number of bins discretizing the rotation around front')
+parser.add_argument('--visualize', type=bool, default = False, help='visualize using plotly')
 parser.add_argument('--image_size', type=int, default=300, help="square side length of cropped image")
 parser.add_argument('--use_normals', action="store_true", default=False, help="estimate normals and augment pointcloud")
-parser.add_argument('--old_batch_mode', action="store_true", default=False, help="old batch mode, where batch size is 1 and gradients are accumulated")
+parser.add_argument('--old_batch_mode', action="store_true", default=True, help="old batch mode, where batch size is 1 and gradients are accumulated")
 
 opt = parser.parse_args()
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
@@ -79,8 +78,8 @@ if __name__ == '__main__':
     densefusion = DenseFusionModule(opt)
 
     checkpoint_callback = ModelCheckpoint(dirpath='ckpt/', 
-                            filename='df-{epoch:02d}-{val_loss:.5f}',
-                            monitor="loss",
+                            filename='df-{epoch:02d}-{val_dis:.5f}',
+                            monitor="dis",
                             save_last=True,
                             save_top_k=1,
                             every_n_epochs=1)
