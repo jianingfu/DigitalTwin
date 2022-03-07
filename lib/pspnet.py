@@ -51,7 +51,15 @@ class PSPNet(nn.Module):
 
         self.drop_2 = nn.Dropout2d(p=0.15)
 
-        self.final = nn.Conv2d(64, 128, kernel_size=1)
+        #we don't want this softmax
+        # self.final = nn.Sequential(
+        #     nn.Conv2d(64, 32, kernel_size=1),
+        #     nn.LogSoftmax()
+        # )
+
+        self.final = nn.Conv2d(64, 32, kernel_size=1)
+
+        # self.final = nn.Conv2d(64, 128, kernel_size=1)
 
         # self.final = nn.Sequential(
         #     nn.Conv2d(64, 32, kernel_size=1),
@@ -65,7 +73,7 @@ class PSPNet(nn.Module):
         # )
 
     def forward(self, x):
-        f, class_f = self.feats(x) 
+        f, class_f = self.feats(x)
         p = self.psp(f)
         p = self.drop_1(p)
 
@@ -76,5 +84,5 @@ class PSPNet(nn.Module):
         p = self.drop_2(p)
 
         p = self.up_3(p)
-        
+
         return self.final(p)

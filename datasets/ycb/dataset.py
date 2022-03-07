@@ -8,14 +8,14 @@ import torchvision.transforms as transforms
 import argparse
 import time
 import random
-from lib.transformations import rotation_matrix_from_vectors_procedure, axis_angle_of_rotation_matrix
+from lib.transformations import rotation_matrix_of_axis_angle
 import numpy.ma as ma
 import copy
 import scipy.misc
 import scipy.io as scio
-from datetime import datetime
-#import open3d as o3d
-#import cv2
+import open3d as o3d
+from lib.depth_utils import compute_normals
+import cv2
 
 def standardize_image_size(target_image_size, rmin, rmax, cmin, cmax, image_height, image_width):
     height, width = rmax - rmin, cmax - cmin
@@ -52,25 +52,31 @@ def standardize_image_size(target_image_size, rmin, rmax, cmin, cmax, image_heig
     
     return rmin, rmax, cmin, cmax
 
+def get_random_rotation_around_symmetry_axis(axis, symm_type, num_symm):
+    if symm_type == "radial":
+        if num_symm == "inf":
+            angle = np.random.uniform(0, 2 * np.pi)
+        else:
+            angles = np.arange(0, 2 * np.pi, 2 * np.pi / int(num_symm))
+            angle = np.random.choice(angles)
+        return rotation_matrix_of_axis_angle(axis, angle).squeeze()
+    else:
+        raise Exception("Invalid symm_type " + symm_type)
+    
+
 class PoseDataset(data.Dataset):
-    def __init__(self, mode, num_pt, add_noise, root, noise_trans, num_rot_bins, image_size, append_depth_to_image=False, add_front_aug=False):
+    def __init__(self, mode, num_pt, add_noise, root, noise_trans, refine, image_size=-1, use_normals=False):
         if mode == 'train':
             self.path = 'datasets/ycb/dataset_config/train_data_list.txt'
         elif mode == 'test':
             self.path = 'datasets/ycb/dataset_config/test_data_list.txt'
         self.num_pt = num_pt
         self.root = root
-        self.image_size = image_size
-
-        print("root", self.root)
-
-        self.append_depth_to_image = append_depth_to_image
-
-        #doesn't really make sense the way this is implemented
-        self.add_front_aug = add_front_aug
-
         self.add_noise = add_noise
         self.noise_trans = noise_trans
+
+        self.image_size = image_size
+        self.use_normals = use_normals
 
         self.list = []
         self.real = []
@@ -97,16 +103,14 @@ class PoseDataset(data.Dataset):
         class_file = open('datasets/ycb/dataset_config/classes.txt')
         class_id = 1
         self.cld = {}
-        
-        #front vector for objects
+
         self.frontd = {}
 
         #symmetries for objects
         self.symmd = {}
+        self.symmetry_obj_idx = [12, 15, 18, 19, 20]
 
         supported_symm_types = {'radial'}
-
-        self.symmetry_obj_idx = [12, 15, 18, 19, 20]
 
         while 1:
             class_input = class_file.readline()
@@ -119,7 +123,7 @@ class PoseDataset(data.Dataset):
                 input_line = input_file.readline()
                 if not input_line:
                     break
-                input_line = input_line.rstrip().split(' ')
+                input_line = input_line[:-1].split(' ')
                 self.cld[class_id].append([float(input_line[0]), float(input_line[1]), float(input_line[2])])
             self.cld[class_id] = np.array(self.cld[class_id])
             input_file.close()
@@ -150,7 +154,7 @@ class PoseDataset(data.Dataset):
                 input_file.close()
             else:
                 self.symmd[class_id] = []
-
+            
             class_id += 1
 
         self.cam_cx_1 = 312.9869
@@ -174,70 +178,14 @@ class PoseDataset(data.Dataset):
         self.num_pt_mesh_small = 500
         self.num_pt_mesh_large = 2600
         self.front_num = 2
-        self.num_rot_bins = num_rot_bins
-        self.rot_bin_width = 2. * np.pi / num_rot_bins
 
-
-        #preload items
-        num_preload = 0
-
-        self.preloaded_img = {}
-        self.preloaded_depth = {}
-        self.preloaded_label = {}
-        self.preloaded_meta = {}
-
-        #don't have enough room for test
-        if mode == 'train':
-            for index in range(num_preload):
-                color_key = '{0}/{1}-color.png'.format(self.root, self.list[index])
-                depth_key = '{0}/{1}-depth.png'.format(self.root, self.list[index])
-                label_key = '{0}/{1}-label.png'.format(self.root, self.list[index])
-                meta_key = '{0}/{1}-meta.mat'.format(self.root, self.list[index])
-                
-                #keep our io's as close as possible
-                color = Image.open(color_key)
-                depth = Image.open(depth_key)
-                label = Image.open(label_key)
-                self.preloaded_meta[meta_key] = scio.loadmat(meta_key)
-
-                keep = color.copy()
-                color.close()
-                self.preloaded_img[color_key] = keep
-
-                keep = np.copy(np.array(depth))
-                depth.close()
-                self.preloaded_depth[depth_key] = keep
-
-                keep = np.copy(np.array(label))
-                label.close()
-                self.preloaded_label[label_key] = keep
-                
-
-                if index % 1000 == 0:
-                    print(datetime.now())
-                    print("pre-loaded {0} data".format(index))
-
-    
+        print(len(self.list))
 
     def __getitem__(self, index):
-
-        color = '{0}/{1}-color.png'.format(self.root, self.list[index])
-        depth = '{0}/{1}-depth.png'.format(self.root, self.list[index])
-        label = '{0}/{1}-label.png'.format(self.root, self.list[index])
-        meta = '{0}/{1}-meta.mat'.format(self.root, self.list[index])
-
-        #print(color)
-
-        if color in self.preloaded_img:
-            img = self.preloaded_img[color]
-            depth = self.preloaded_depth[depth]
-            label = self.preloaded_label[label]
-            meta = self.preloaded_meta[meta]
-        else:
-            img = Image.open(color)
-            depth = np.array(Image.open(depth))
-            label = np.array(Image.open(label))
-            meta = scio.loadmat(meta)
+        img = Image.open('{0}/{1}-color.png'.format(self.root, self.list[index]))
+        depth = np.array(Image.open('{0}/{1}-depth.png'.format(self.root, self.list[index])))
+        label = np.array(Image.open('{0}/{1}-label.png'.format(self.root, self.list[index])))
+        meta = scio.loadmat('{0}/{1}-meta.mat'.format(self.root, self.list[index]))
 
         if self.list[index][:8] != 'data_syn' and int(self.list[index][5:9]) >= 60:
             cam_cx = self.cam_cx_2
@@ -282,7 +230,7 @@ class PoseDataset(data.Dataset):
 
         obj = meta['cls_indexes'].flatten().astype(np.int32)
 
-        #select an object and 
+        #select an object
         while 1:
             idx = np.random.randint(0, len(obj))
             mask_depth = ma.getmaskarray(ma.masked_not_equal(depth, 0))
@@ -294,7 +242,9 @@ class PoseDataset(data.Dataset):
             rmin, rmax, cmin, cmax = get_bbox(mask_label)
             h, w, _= np.array(img).shape
             rmin, rmax, cmin, cmax = max(0, rmin), min(h, rmax), max(0, cmin), min(w, cmax)
-            rmin, rmax, cmin, cmax = standardize_image_size(self.image_size, rmin, rmax, cmin, cmax, h, w)
+
+            if self.image_size != -1:
+                rmin, rmax, cmin, cmax = standardize_image_size(self.image_size, rmin, rmax, cmin, cmax, h, w)
 
             choose = mask[rmin:rmax, cmin:cmax].flatten().nonzero()[0]
 
@@ -310,145 +260,52 @@ class PoseDataset(data.Dataset):
             else:
                 choose = np.pad(choose, (0, self.num_pt - len(choose)), 'wrap')
                 break
-        
-        #cv2.imwrite("mask.png", mask.astype(np.uint16) * 65535)
+
+        if self.add_noise:
+            img = self.trancolor(img)
+
+            if len(choose) == 0:
+                continue
+
+        if self.list[index][:8] == 'data_syn':
+            seed = random.choice(self.real)
+            back = np.array(self.trancolor(Image.open('{0}/{1}-color.png'.format(self.root, seed)).convert("RGB")))
+            back = np.transpose(back, (2, 0, 1))[:, rmin:rmax, cmin:cmax]
+            img_masked = back * mask_back[rmin:rmax, cmin:cmax] + img
+        else:
+            img_masked = img
+
+        if self.add_noise and add_front:
+            img_masked = img_masked * mask_front[rmin:rmax, cmin:cmax] + front[:, rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
+
+        if self.list[index][:8] == 'data_syn':
+            img_masked = img_masked + np.random.normal(loc=0.0, scale=7.0, size=img_masked.shape)
 
         target_r = meta['poses'][:, :, idx][:, 0:3]
         target_t = np.array([meta['poses'][:, :, idx][:, 3:4].flatten()])
         add_t = np.array([random.uniform(-self.noise_trans, self.noise_trans) for i in range(3)])
 
-
-        #calculating our histogram rotation representation
-        
         #right now, we are only dealing with one "front" axis
-        front = self.frontd[obj[idx]][0]
+        front = np.expand_dims(self.frontd[obj[idx]][0], 0) * .1
 
-        front = front / np.linalg.norm(front) * 0.1
-
+        #PERFORM SYMMETRY ROTATION AUGMENTATION
         #symmetries
         symm = self.symmd[obj[idx]]
-
-        #calculate front axis in GT pose
-        front_r = target_r @ front
-
-        rot_bins = np.zeros(self.num_rot_bins).astype(np.float32)
-
-        #find rotation matrix that goes from front -> front_r
-        Rf = rotation_matrix_from_vectors_procedure(front, front_r)
-
-        #find residual rotation
-        R_around_front = target_r @ Rf.T
-
-        #axis will be the same as R_around_front
-        axis, angle = axis_angle_of_rotation_matrix(R_around_front)
-
-        #negate the axis and the angle
-        if np.abs(np.linalg.norm(axis + front_r)) < 0.001:
-            axis = -axis
-            angle = -angle
-
-        if angle < 0:
-            angle += np.pi * 2
-        if angle > np.pi * 2:
-            angle -= np.pi * 2
-
-        assert (angle >= 0 and angle <= np.pi * 2)
-        
-        angle_bin = int(angle / 2 / np.pi * self.num_rot_bins)
 
         #calculate other peaks based on size of symm
         if len(symm) > 0:
             symm_type, num_symm = symm[0]
-            if num_symm == 'inf':
-                rot_bins[:] = 1.
-            else:
-                num_symm = int(num_symm)
+            symmetry_augmentation = get_random_rotation_around_symmetry_axis(front, symm_type, num_symm)
+            target_r = target_r @ symmetry_augmentation
 
-                symm_bins = (np.arange(0, 2 * np.pi, 2 * np.pi / num_symm) / self.rot_bin_width).astype(np.int)
-                symm_bins += angle_bin
-                symm_bins = np.mod(symm_bins, self.num_rot_bins)
-                rot_bins[symm_bins] = 1.
-        
-        else:
-            rot_bins[angle_bin] = 1. 
-
-        rot_bins /= np.linalg.norm(rot_bins, ord=1)
-        
-        if self.add_noise:
-            img = self.trancolor(img)
-
-        img = np.array(img)
-
-        img = np.transpose(img[:, :, :3], (2, 0, 1))[:, rmin:rmax, cmin:cmax]
-
-        depth_masked = depth[rmin:rmax, cmin:cmax]
-        xmap_masked = self.xmap[rmin:rmax, cmin:cmax]
-        ymap_masked = self.ymap[rmin:rmax, cmin:cmax]
-
-        #cv2.imwrite("test_no_back.png", np.transpose(img, (1, 2, 0)))
-        #cv2.imwrite("depth_no_back.png", depth_masked.astype(np.uint16))
-
-        if self.list[index][:8] == 'data_syn':
-            seed = random.choice(self.real)
-            back = np.array(self.trancolor(Image.open('{0}/{1}-color.png'.format(self.root, seed)).convert("RGB")))
-            back_depth = np.array(Image.open('{0}/{1}-depth.png'.format(self.root, seed)))
-            back = np.transpose(back, (2, 0, 1))[:, rmin:rmax, cmin:cmax]
-            back_depth = back_depth[rmin:rmax, cmin:cmax]
-
-            img_masked = back * mask_back[rmin:rmax, cmin:cmax] + img * ~(mask_back[rmin:rmax, cmin:cmax])
-            depth_masked = back_depth * mask_back[rmin:rmax, cmin:cmax] + depth_masked * ~(mask_back[rmin:rmax, cmin:cmax])
-        else:
-            img_masked = img
-
-        #cv2.imwrite("test_no_front.png", np.transpose(img_masked, (1, 2, 0)))
-        #cv2.imwrite("depth_no_front.png", depth_masked.astype(np.uint16))
-
-        if self.add_noise and add_front:
-            #print("adding front")
-
-            img_masked = img_masked * mask_front[rmin:rmax, cmin:cmax] + front_rgb[:, rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
-            depth_masked = depth_masked * mask_front[rmin:rmax, cmin:cmax] + front_depth[rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
-
-        if self.list[index][:8] == 'data_syn':
-            img_masked = img_masked + np.random.normal(loc=0.0, scale=7.0, size=img_masked.shape)
-
-        img_masked = self.norm(torch.from_numpy(img_masked.astype(np.float32)))
-
-        if self.append_depth_to_image:
-            cam_scale = meta['factor_depth'][0][0]
-            pt2 = depth_masked / cam_scale
-            pt0 = (ymap_masked - cam_cx) * pt2 / cam_fx
-            pt1 = (xmap_masked - cam_cy) * pt2 / cam_fy
-
-            pt0 = np.expand_dims(pt0, -1)
-            pt1 = np.expand_dims(pt1, -1)
-            pt2 = np.expand_dims(pt2, -1)
-
-            cloud = np.concatenate((pt0, pt1, pt2), axis=2)
-            if self.add_noise:
-                cloud = np.add(cloud, add_t)
-
-            cloud = np.transpose(cloud, (2, 0, 1))
-
-            #cv2.imwrite("label.png", label)
-            #cv2.imwrite("test.png", np.transpose(img_masked, (1, 2, 0)))
-            #cv2.imwrite("depth.png", depth_masked.astype(np.uint16))
-
-            #test_pcld = o3d.geometry.PointCloud()
-            #test_pcld.points = o3d.utility.Vector3dVector(np.transpose(cloud, (1, 2, 0)).reshape((-1, 3)))
-            #test_pcld.colors = o3d.utility.Vector3dVector(np.transpose(img_masked, (1, 2, 0)).reshape((-1, 3)))
-            #o3d.io.write_point_cloud("projected.ply", test_pcld)
-
-            cloud = torch.from_numpy(cloud.astype(np.float32))
-
-            img_masked = torch.cat((img_masked, cloud), axis=0)
-
-        depth_masked = depth_masked.flatten()[choose][:, np.newaxis].astype(np.float32)
-        xmap_masked = xmap_masked.flatten()[choose][:, np.newaxis].astype(np.float32)
-        ymap_masked = ymap_masked.flatten()[choose][:, np.newaxis].astype(np.float32)
-        choose = np.array([choose])
 
         cam_scale = meta['factor_depth'][0][0]
+
+        depth_masked = depth[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
+        xmap_masked = self.xmap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
+        ymap_masked = self.ymap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
+        choose = np.array([choose])
+
         pt2 = depth_masked / cam_scale
         pt0 = (ymap_masked - cam_cx) * pt2 / cam_fx
         pt1 = (xmap_masked - cam_cy) * pt2 / cam_fy
@@ -456,37 +313,51 @@ class PoseDataset(data.Dataset):
         if self.add_noise:
             cloud = np.add(cloud, add_t)
 
+        
+        #NORMALS
+        if self.use_normals:
+            depth_mm = (depth * (1000 / cam_scale)).astype(np.uint16)
+            normals = compute_normals(depth_mm, cam_fx, cam_fy)
+            normals_masked = normals[rmin:rmax, cmin:cmax].reshape((-1, 3))[choose].astype(np.float32).squeeze(0)
+            cloud = np.hstack((cloud, normals_masked))
+
         model_points = self.cld[obj[idx]]
-        select_list = np.random.choice(len(model_points), self.num_pt_mesh_small, replace=False) # without replacement, so that it won't choice duplicate points
+        if self.refine:
+            select_list = np.random.choice(len(model_points), self.num_pt_mesh_large, replace=False) # without replacement, so that it won't choice duplicate points
+        else:
+            select_list = np.random.choice(len(model_points), self.num_pt_mesh_small, replace=False) # without replacement, so that it won't choice duplicate points
         model_points = model_points[select_list]
 
+        target = np.dot(model_points, target_r.T)
+        if self.add_noise:
+            target = np.add(target, target_t + add_t)
+        else:
+            target = np.add(target, target_t)
+            
+        target_front = np.dot(front, target_r.T)
+
+        if self.add_noise:
+            target_front = np.add(target_front, target_t + add_t)
+        else:
+            target_front = np.add(target_front, target_t)
+        
         return torch.from_numpy(cloud.astype(np.float32)), \
                torch.LongTensor(choose.astype(np.int32)), \
-               img_masked, \
-               torch.from_numpy(front_r.astype(np.float32)), \
-               torch.from_numpy(rot_bins.astype(np.float32)), \
-               torch.from_numpy(front.astype(np.float32)), \
-               torch.from_numpy(target_t.astype(np.float32)), \
+               self.norm(torch.from_numpy(img_masked.astype(np.float32))), \
+               torch.from_numpy(target.astype(np.float32)), \
+               torch.from_numpy(target_front.astype(np.float32)), \
                torch.from_numpy(model_points.astype(np.float32)), \
+               torch.from_numpy(front.astype(np.float32)), \
                torch.LongTensor([int(obj[idx]) - 1])
 
     def get_all_objects(self, index):
 
-        color = '{0}/{1}-color.png'.format(self.root, self.list[index])
-        depth = '{0}/{1}-depth.png'.format(self.root, self.list[index])
-        label = '{0}/{1}-label.png'.format(self.root, self.list[index])
-        meta = '{0}/{1}-meta.mat'.format(self.root, self.list[index])
+        color_filename = '{0}/{1}-color.png'.format(self.root, self.list[index])
 
-        if color in self.preloaded_img:
-            img = self.preloaded_img[color]
-            depth = self.preloaded_depth[depth]
-            label = self.preloaded_label[label]
-            meta = self.preloaded_meta[meta]
-        else:
-            img = Image.open(color)
-            depth = np.array(Image.open(depth))
-            label = np.array(Image.open(label))
-            meta = scio.loadmat(meta)
+        img = Image.open(color_filename)
+        depth = np.array(Image.open('{0}/{1}-depth.png'.format(self.root, self.list[index])))
+        label = np.array(Image.open('{0}/{1}-label.png'.format(self.root, self.list[index])))
+        meta = scio.loadmat('{0}/{1}-meta.mat'.format(self.root, self.list[index]))
 
         if self.list[index][:8] != 'data_syn' and int(self.list[index][5:9]) >= 60:
             cam_cx = self.cam_cx_2
@@ -536,25 +407,48 @@ class PoseDataset(data.Dataset):
         orig_img = img
 
         for idx in range(len(obj)):
+            img = orig_img
+
             mask_depth = ma.getmaskarray(ma.masked_not_equal(depth, 0))
             mask_label = ma.getmaskarray(ma.masked_equal(label, obj[idx]))
-
             mask = mask_label * mask_depth
+
             if len(mask.nonzero()[0]) <= self.minimum_num_pt:
-                print("WARNING, NOT ENOUGH POINTS LABELED OBJECT {0} in FRAME {1}".format(obj[idx], color))
+                print("WARNING, NOT ENOUGH POINTS LABELED OBJECT {0} in FRAME {1}".format(obj[idx], color_filename))
                 continue
 
+            if self.add_noise:
+                img = self.trancolor(img)
+
             rmin, rmax, cmin, cmax = get_bbox(mask_label)
+            img = np.transpose(np.array(img)[:, :, :3], (2, 0, 1))[:, rmin:rmax, cmin:cmax]
 
-            h, w, _= np.array(orig_img).shape
+            if self.list[index][:8] == 'data_syn':
+                seed = random.choice(self.real)
+                back = np.array(self.trancolor(Image.open('{0}/{1}-color.png'.format(self.root, seed)).convert("RGB")))
+                back = np.transpose(back, (2, 0, 1))[:, rmin:rmax, cmin:cmax]
+                img_masked = back * mask_back[rmin:rmax, cmin:cmax] + img
+            else:
+                img_masked = img
 
-            rmin, rmax, cmin, cmax = max(0, rmin), min(h, rmax), max(0, cmin), min(w, cmax)
-            rmin, rmax, cmin, cmax = standardize_image_size(self.image_size, rmin, rmax, cmin, cmax, h, w)
+            if self.add_noise and add_front:
+                img_masked = img_masked * mask_front[rmin:rmax, cmin:cmax] + front[:, rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
+
+            if self.list[index][:8] == 'data_syn':
+                img_masked = img_masked + np.random.normal(loc=0.0, scale=7.0, size=img_masked.shape)
+
+            # p_img = np.transpose(img_masked, (1, 2, 0))
+            # scipy.misc.imsave('temp/{0}_input.png'.format(index), p_img)
+            # scipy.misc.imsave('temp/{0}_label.png'.format(index), mask[rmin:rmax, cmin:cmax].astype(np.int32))
+
+            target_r = meta['poses'][:, :, idx][:, 0:3]
+            target_t = np.array([meta['poses'][:, :, idx][:, 3:4].flatten()])
+            add_t = np.array([random.uniform(-self.noise_trans, self.noise_trans) for i in range(3)])
 
             choose = mask[rmin:rmax, cmin:cmax].flatten().nonzero()[0]
 
             if len(choose) == 0:
-                print("WARNING, NO POINTS LABELED OBJECT {0} in FRAME {1}".format(obj[idx], color))
+                print("WARNING, NO POINTS LABELED OBJECT {0} in FRAME {1}".format(obj[idx], color_filename))
                 continue
 
             if len(choose) > self.num_pt:
@@ -564,144 +458,10 @@ class PoseDataset(data.Dataset):
                 choose = choose[c_mask.nonzero()]
             else:
                 choose = np.pad(choose, (0, self.num_pt - len(choose)), 'wrap')
-        
-            #cv2.imwrite("mask.png", mask.astype(np.uint16) * 65535)
-
-            target_r = meta['poses'][:, :, idx][:, 0:3]
-            target_t = np.array([meta['poses'][:, :, idx][:, 3:4].flatten()])
-            add_t = np.array([random.uniform(-self.noise_trans, self.noise_trans) for i in range(3)])
-
-
-            #calculating our histogram rotation representation
             
-            #right now, we are only dealing with one "front" axis
-            front = self.frontd[obj[idx]][0]
-
-            front = front / np.linalg.norm(front) * 0.1
-
-            #symmetries
-            symm = self.symmd[obj[idx]]
-
-            #calculate front axis in GT pose
-            front_r = target_r @ front
-
-            rot_bins = np.zeros(self.num_rot_bins).astype(np.float32)
-
-            #find rotation matrix that goes from front -> front_r
-            Rf = rotation_matrix_from_vectors_procedure(front, front_r)
-
-            #find residual rotation
-            R_around_front = target_r @ Rf.T
-
-            #axis will be the same as R_around_front
-            axis, angle = axis_angle_of_rotation_matrix(R_around_front)
-
-            #negate the axis and the angle
-            if np.abs(np.linalg.norm(axis + front_r)) < 0.001:
-                axis = -axis
-                angle = -angle
-
-            if angle < 0:
-                angle += np.pi * 2
-            if angle > np.pi * 2:
-                angle -= np.pi * 2
-
-            assert (angle >= 0 and angle <= np.pi * 2)
-            
-            angle_bin = int(angle / 2 / np.pi * self.num_rot_bins)
-
-            #calculate other peaks based on size of symm
-            if len(symm) > 0:
-                symm_type, num_symm = symm[0]
-                if num_symm == 'inf':
-                    rot_bins[:] = 1.
-                else:
-                    num_symm = int(num_symm)
-
-                    symm_bins = (np.arange(0, 2 * np.pi, 2 * np.pi / num_symm) / self.rot_bin_width).astype(np.int)
-                    symm_bins += angle_bin
-                    symm_bins = np.mod(symm_bins, self.num_rot_bins)
-                    rot_bins[symm_bins] = 1.
-            
-            else:
-                rot_bins[angle_bin] = 1. 
-
-            rot_bins /= np.linalg.norm(rot_bins, ord=1)
-            
-            img = orig_img
-
-            if self.add_noise:
-                img = self.trancolor(img)
-
-            img = np.array(img)
-
-            img = np.transpose(img[:, :, :3], (2, 0, 1))[:, rmin:rmax, cmin:cmax]
-
-            depth_masked = depth[rmin:rmax, cmin:cmax]
-            xmap_masked = self.xmap[rmin:rmax, cmin:cmax]
-            ymap_masked = self.ymap[rmin:rmax, cmin:cmax]
-
-            #cv2.imwrite("test_no_back.png", np.transpose(img, (1, 2, 0)))
-            #cv2.imwrite("depth_no_back.png", depth_masked.astype(np.uint16))
-
-            if self.list[index][:8] == 'data_syn':
-                seed = random.choice(self.real)
-                back = np.array(self.trancolor(Image.open('{0}/{1}-color.png'.format(self.root, seed)).convert("RGB")))
-                back_depth = np.array(Image.open('{0}/{1}-depth.png'.format(self.root, seed)))
-                back = np.transpose(back, (2, 0, 1))[:, rmin:rmax, cmin:cmax]
-                back_depth = back_depth[rmin:rmax, cmin:cmax]
-
-                img_masked = back * mask_back[rmin:rmax, cmin:cmax] + img * ~(mask_back[rmin:rmax, cmin:cmax])
-                depth_masked = back_depth * mask_back[rmin:rmax, cmin:cmax] + depth_masked * ~(mask_back[rmin:rmax, cmin:cmax])
-            else:
-                img_masked = img
-
-            #cv2.imwrite("test_no_front.png", np.transpose(img_masked, (1, 2, 0)))
-            #cv2.imwrite("depth_no_front.png", depth_masked.astype(np.uint16))
-
-            if self.add_noise and add_front:
-                #print("adding front")
-
-                img_masked = img_masked * mask_front[rmin:rmax, cmin:cmax] + front_rgb[:, rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
-                depth_masked = depth_masked * mask_front[rmin:rmax, cmin:cmax] + front_depth[rmin:rmax, cmin:cmax] * ~(mask_front[rmin:rmax, cmin:cmax])
-
-            if self.list[index][:8] == 'data_syn':
-                img_masked = img_masked + np.random.normal(loc=0.0, scale=7.0, size=img_masked.shape)
-
-            img_masked = self.norm(torch.from_numpy(img_masked.astype(np.float32)))
-
-            if self.append_depth_to_image:
-                cam_scale = meta['factor_depth'][0][0]
-                pt2 = depth_masked / cam_scale
-                pt0 = (ymap_masked - cam_cx) * pt2 / cam_fx
-                pt1 = (xmap_masked - cam_cy) * pt2 / cam_fy
-
-                pt0 = np.expand_dims(pt0, -1)
-                pt1 = np.expand_dims(pt1, -1)
-                pt2 = np.expand_dims(pt2, -1)
-
-                cloud = np.concatenate((pt0, pt1, pt2), axis=2)
-                if self.add_noise:
-                    cloud = np.add(cloud, add_t)
-
-                cloud = np.transpose(cloud, (2, 0, 1))
-
-                #cv2.imwrite("label.png", label)
-                #cv2.imwrite("test.png", np.transpose(img_masked, (1, 2, 0)))
-                #cv2.imwrite("depth.png", depth_masked.astype(np.uint16))
-
-                #test_pcld = o3d.geometry.PointCloud()
-                #test_pcld.points = o3d.utility.Vector3dVector(np.transpose(cloud, (1, 2, 0)).reshape((-1, 3)))
-                #test_pcld.colors = o3d.utility.Vector3dVector(np.transpose(img_masked, (1, 2, 0)).reshape((-1, 3)))
-                #o3d.io.write_point_cloud("projected.ply", test_pcld)
-
-                cloud = torch.from_numpy(cloud.astype(np.float32))
-
-                img_masked = torch.cat((img_masked, cloud), axis=0)
-
-            depth_masked = depth_masked.flatten()[choose][:, np.newaxis].astype(np.float32)
-            xmap_masked = xmap_masked.flatten()[choose][:, np.newaxis].astype(np.float32)
-            ymap_masked = ymap_masked.flatten()[choose][:, np.newaxis].astype(np.float32)
+            depth_masked = depth[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
+            xmap_masked = self.xmap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
+            ymap_masked = self.ymap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis].astype(np.float32)
             choose = np.array([choose])
 
             cam_scale = meta['factor_depth'][0][0]
@@ -712,18 +472,27 @@ class PoseDataset(data.Dataset):
             if self.add_noise:
                 cloud = np.add(cloud, add_t)
 
-            model_points = self.cld[obj[idx]]
-            select_list = np.random.choice(len(model_points), self.num_pt_mesh_small, replace=False) # without replacement, so that it won't choice duplicate points
-            model_points = model_points[select_list]
+            #NORMALS
+            if self.use_normals:
+                depth_mm = (depth * (1000 / cam_scale)).astype(np.uint16)
+                normals = compute_normals(depth_mm, cam_fx, cam_fy)
+                normals_masked = normals[rmin:rmax, cmin:cmax].reshape((-1, 3))[choose].astype(np.float32).squeeze(0)
+                cloud = np.hstack((cloud, normals_masked))
 
-            data_output.append(
-                ([torch.from_numpy(cloud.astype(np.float32)), \
+            #return all model_points (no sampling), for evaluation
+            model_points = self.cld[obj[idx]]
+
+            target = np.dot(model_points, target_r.T)
+            if self.add_noise:
+                target = np.add(target, target_t + add_t)
+            else:
+                target = np.add(target, target_t)
+
+            
+            data_output.append(([torch.from_numpy(cloud.astype(np.float32)), \
                 torch.LongTensor(choose.astype(np.int32)), \
-                img_masked, \
-                torch.from_numpy(front_r.astype(np.float32)), \
-                torch.from_numpy(rot_bins.astype(np.float32)), \
-                torch.from_numpy(front.astype(np.float32)), \
-                torch.from_numpy(target_t.astype(np.float32)), \
+                self.norm(torch.from_numpy(img_masked.astype(np.float32))), \
+                torch.from_numpy(target.astype(np.float32)), \
                 torch.from_numpy(model_points.astype(np.float32)), \
                 torch.LongTensor([int(obj[idx]) - 1])], (cam_fx, cam_fy, cam_cx, cam_cy)))
 
@@ -782,6 +551,3 @@ def get_bbox(label):
         cmax = img_length
         cmin -= delt
     return rmin, rmax, cmin, cmax
-    
-
-
