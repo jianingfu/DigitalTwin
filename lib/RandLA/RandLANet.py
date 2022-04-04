@@ -1,52 +1,46 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pytorch_utils as pt_utils
+import lib.pytorch_utils as pt_utils
 from lib.RandLA.helper_tool import DataProcessing as DP
 import numpy as np
 from sklearn.metrics import confusion_matrix
-# Imported from FFB6D https://github.com/ethnhe/FFB6D/tree/master/ffb6d/models/RandLA
+
 
 class Network(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, cfg):
         super().__init__()
-        self.config = config
+        self.config = cfg.rndla_cfg
 
-        self.fc0 = pt_utils.Conv1d(config.in_c, 8, kernel_size=1, bn=True)
+        self.fc0 = pt_utils.Conv1d(self.config.in_c, 8, kernel_size=1, bn=cfg.batch_norm)
 
         self.dilated_res_blocks = nn.ModuleList()
         d_in = 8
         for i in range(self.config.num_layers):
             d_out = self.config.d_out[i]
-            self.dilated_res_blocks.append(Dilated_res_block(d_in, d_out))
+            self.dilated_res_blocks.append(Dilated_res_block(d_in, d_out, cfg))
             d_in = 2 * d_out
 
         d_out = d_in
-        self.decoder_0 = pt_utils.Conv2d(d_in, d_out, kernel_size=(1,1), bn=True)
+        self.decoder_0 = pt_utils.Conv2d(d_in, d_out, kernel_size=(1,1), bn=cfg.batch_norm)
 
         self.decoder_blocks = nn.ModuleList()
         for j in range(self.config.num_layers):
-            if j < 3:
+            if j < 1:
                 d_in = d_out + 2 * self.config.d_out[-j-2]
                 d_out = 2 * self.config.d_out[-j-2]
             else:
-                d_in = 4 * self.config.d_out[-4]
-                d_out = 2 * self.config.d_out[-4]
-            self.decoder_blocks.append(pt_utils.Conv2d(d_in, d_out, kernel_size=(1,1), bn=True))
+                d_in = 4 * self.config.d_out[-2]
+                d_out = 2 * self.config.d_out[-2]
+            self.decoder_blocks.append(pt_utils.Conv2d(d_in, d_out, kernel_size=(1,1), bn=cfg.batch_norm))
 
-        self.fc1 = pt_utils.Conv2d(d_out, 64, kernel_size=(1,1), bn=True)
-        self.fc2 = pt_utils.Conv2d(64, 32, kernel_size=(1,1), bn=True)
-        self.dropout = nn.Dropout(0.5)
-        self.fc3 = pt_utils.Conv2d(32, self.config.num_classes, kernel_size=(1,1), bn=False, activation=None)
+        self.fc1 = pt_utils.Conv2d(d_out, 64, kernel_size=(1,1), bn=cfg.batch_norm)
+        self.fc2 = pt_utils.Conv2d(64, 128, kernel_size=(1,1), bn=cfg.batch_norm)
 
     def forward(self, end_points):
 
-        # features = end_points['features']  # Batch*channel*npoints
-        features = end_points
-        print("feature orig shape ", features.shape)
-        features = np.swapaxes(features, 1, 2)
-        print("feautre swapped shape", features.shape)
+        features = end_points['RLA_features']  # Batch*channel*npoints
         features = self.fc0(features)
 
         features = features.unsqueeze(dim=3)  # Batch*channel*npoints*1
@@ -55,12 +49,11 @@ class Network(nn.Module):
         f_encoder_list = []
         for i in range(self.config.num_layers):
             f_encoder_i = self.dilated_res_blocks[i](
-                features, end_points['xyz'][i], end_points['neigh_idx'][i]
+                features, end_points['RLA_xyz_%d'%i], end_points['RLA_neigh_idx_%d'%i]
             )
 
-            f_sampled_i = self.random_sample(f_encoder_i, end_points['sub_idx'][i])
+            f_sampled_i = self.random_sample(f_encoder_i, end_points['RLA_sub_idx_%d'%i])
             features = f_sampled_i
-            print("encoder%d:"%i, features.size())
             if i == 0:
                 f_encoder_list.append(f_encoder_i)
             f_encoder_list.append(f_sampled_i)
@@ -71,24 +64,19 @@ class Network(nn.Module):
         # ###########################Decoder############################
         f_decoder_list = []
         for j in range(self.config.num_layers):
-            f_interp_i = self.nearest_interpolation(features, end_points['interp_idx'][-j - 1])
+            f_interp_i = self.nearest_interpolation(features, end_points['RLA_interp_idx_%d'%(self.config.num_layers-j-1)])
             f_decoder_i = self.decoder_blocks[j](torch.cat([f_encoder_list[-j - 2], f_interp_i], dim=1))
 
             features = f_decoder_i
-            print("decoder%d:"%j, features.size())
             f_decoder_list.append(f_decoder_i)
         # ###########################Decoder############################
 
         features = self.fc1(features)
         features = self.fc2(features)
-        features = self.dropout(features)
-        features = self.fc3(features)
-        f_out = features.squeeze(3)
 
-        print("f out shape ",f_out.shape)
-        # end_points['logits'] = f_out
-        # return end_points
-        return f_out
+        end_points["RLA_embeddings"] = features.squeeze(3)
+
+        return end_points
 
     @staticmethod
     def random_sample(feature, pool_idx):
@@ -174,13 +162,13 @@ class IoUCalculator:
 
 
 class Dilated_res_block(nn.Module):
-    def __init__(self, d_in, d_out):
+    def __init__(self, d_in, d_out, cfg):
         super().__init__()
 
-        self.mlp1 = pt_utils.Conv2d(d_in, d_out//2, kernel_size=(1,1), bn=True)
-        self.lfa = Building_block(d_out)
-        self.mlp2 = pt_utils.Conv2d(d_out, d_out*2, kernel_size=(1, 1), bn=True, activation=None)
-        self.shortcut = pt_utils.Conv2d(d_in, d_out*2, kernel_size=(1,1), bn=True, activation=None)
+        self.mlp1 = pt_utils.Conv2d(d_in, d_out//2, kernel_size=(1,1), bn=cfg.batch_norm)
+        self.lfa = Building_block(d_out, cfg)
+        self.mlp2 = pt_utils.Conv2d(d_out, d_out*2, kernel_size=(1, 1), bn=cfg.batch_norm, activation=None)
+        self.shortcut = pt_utils.Conv2d(d_in, d_out*2, kernel_size=(1,1), bn=cfg.batch_norm, activation=None)
 
     def forward(self, feature, xyz, neigh_idx):
         f_pc = self.mlp1(feature)  # Batch*channel*npoints*1
@@ -191,13 +179,13 @@ class Dilated_res_block(nn.Module):
 
 
 class Building_block(nn.Module):
-    def __init__(self, d_out):  #  d_in = d_out//2
+    def __init__(self, d_out, cfg):  #  d_in = d_out//2
         super().__init__()
-        self.mlp1 = pt_utils.Conv2d(10, d_out//2, kernel_size=(1,1), bn=True)
-        self.att_pooling_1 = Att_pooling(d_out, d_out//2)
+        self.mlp1 = pt_utils.Conv2d(10, d_out//2, kernel_size=(1,1), bn=cfg.batch_norm)
+        self.att_pooling_1 = Att_pooling(d_out, d_out//2, cfg)
 
-        self.mlp2 = pt_utils.Conv2d(d_out//2, d_out//2, kernel_size=(1, 1), bn=True)
-        self.att_pooling_2 = Att_pooling(d_out, d_out)
+        self.mlp2 = pt_utils.Conv2d(d_out//2, d_out//2, kernel_size=(1, 1), bn=cfg.batch_norm)
+        self.att_pooling_2 = Att_pooling(d_out, d_out, cfg)
 
     def forward(self, xyz, feature, neigh_idx):  # feature: Batch*channel*npoints*1
         f_xyz = self.relative_pos_encoding(xyz, neigh_idx)  # batch*npoint*nsamples*10
@@ -241,10 +229,10 @@ class Building_block(nn.Module):
 
 
 class Att_pooling(nn.Module):
-    def __init__(self, d_in, d_out):
+    def __init__(self, d_in, d_out, cfg):
         super().__init__()
         self.fc = nn.Conv2d(d_in, d_in, (1, 1), bias=False)
-        self.mlp = pt_utils.Conv2d(d_in, d_out, kernel_size=(1,1), bn=True)
+        self.mlp = pt_utils.Conv2d(d_in, d_out, kernel_size=(1,1), bn=cfg.batch_norm)
 
     def forward(self, feature_set):
 

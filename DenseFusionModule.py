@@ -15,73 +15,78 @@ import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.autograd import Variable
-from lib.network import PoseNet
+from lib.network import PoseNet, PoseRefineNet
 from lib.loss import Loss
+from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
 import pytorch_lightning as pl
+from lib.randla_utils import randla_processing
 from lib.tools import compute_rotation_matrix_from_ortho6d
+from cfg.config import write_config
 
 
 class DenseFusionModule(pl.LightningModule):
-    def __init__(self, opt):
+    def __init__(self, cfg):
         super().__init__()
-        self.opt = opt
+        self.cfg = cfg
 
-        self.opt.manualSeed = random.randint(1, 10000)
-        random.seed(self.opt.manualSeed)
-        torch.manual_seed(self.opt.manualSeed)
+        self.cfg.manualSeed = random.randint(1, 10000)
+        random.seed(self.cfg.manualSeed)
+        torch.manual_seed(self.cfg.manualSeed)
 
-        self.estimator = PoseNet(num_points=self.opt.num_points, num_obj=self.opt.num_objects, use_normals=self.opt.use_normals)
-        self.refiner = PoseRefineNet(num_points=self.opt.num_points, num_obj=self.opt.num_objects, use_normals=self.opt.use_normals)
+        self.estimator = PoseNet(cfg = self.cfg)
+        self.refiner = PoseRefineNet(cfg = self.cfg)
         self.best_test = np.Inf
         
-        if self.opt.old_batch_mode:
-            self.automatic_optimization = False
-            self.old_batch_size = opt.batch_size
-            self.opt.batch_size = 1
-            self.opt.image_size = -1
+        # if self.cfg.old_batch_mode:
+        #     self.automatic_cfgimization = False
+        #     self.old_batch_size = cfg.batch_size
+        #     self.cfg.batch_size = 1
+        #     self.cfg.image_size = -1
 
     def on_pretrain_routine_start(self):
-        self.opt.sym_list = self.trainer.datamodule.sym_list
-        self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
-        self.criterion = Loss(self.opt.num_points_mesh, self.opt.sym_list, self.opt.use_normals)
-        self.criterion_refine = Loss_refine(self.opt.num_points_mesh, self.opt.sym_list, self.opt.use_normals)
+        self.cfg.sym_list = self.trainer.datamodule.sym_list
+        self.cfg.num_points_mesh = self.trainer.datamodule.num_points_mesh
+        self.criterion = Loss(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals)
+        self.criterion_refine = Loss_refine(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals)
 
     def on_train_epoch_start(self):
         # TODO: do we need this?
-        if self.opt.refine_start:
+        if self.cfg.refine_start:
             self.estimator.eval()
             self.refiner.train()
         else:
             self.estimator.train()
     
     # TODO: check refine
-    def backward(self, loss, optimizer, optimizer_idx):
-        if not self.opt.refine_start:
+    def backward(self, loss, cfgimizer, cfgimizer_idx):
+        if not self.cfg.refine_start:
             loss.backward()
 
+    def on_train_epoch_start(self):
+        write_config(self.cfg, os.path.join(self.cfg.log_dir, "config_current.yaml"))
+
     def training_step(self, batch, batch_idx):
-        points, choose, img, target, target_front, model_points, front, idx = batch
+        end_points = batch
+        end_points = randla_processing(end_points, self.cfg)
 
-        pred_r, pred_t, pred_c, emb = self.estimator(img, points, choose, idx)
+        #pred_r, pred_t, pred_c, emb = estimator(end_points)
+        end_points = self.estimator(end_points)
 
-        loss, dis, new_points, new_target, new_target_front = self.criterion(pred_r, pred_t, pred_c, target, target_front,
-                                                                        model_points, front, idx, points, self.opt.w,
-                                                                        self.opt.refine_start)
-
-        if self.opt.refine_start:
-            for ite in range(0, self.opt.iteration):
-                pred_r, pred_t = self.refiner(new_points, emb, idx)
-                loss, dis, new_points, new_target, new_target_front = self.criterion_refine(pred_r, pred_t, new_target,
-                                                                                            new_target_front, model_points,
-                                                                                            front, idx, new_points)
+        #loss, dis, new_points, new_target, new_target_front = criterion(pred_r, pred_t, pred_c, end_points, opt.w, opt.refine_start)
+        loss, dis, end_points = self.criterion(end_points, self.cfg.w, self.cfg.refine_start)
+        
+        if self.cfg.refine_start:
+            for ite in range(0, self.cfg.iteration):
+                end_points = self.refiner(end_points, ite)
+                loss, dis, end_points = self.criterion_refine(end_points, ite)
                 loss.backward()
 
-        if self.opt.old_batch_mode:
-            if batch_idx != 0 and batch_idx % self.old_batch_size == 0:
-                opt = self.optimizers()
-                opt.step()
-                opt.zero_grad()
+        # if self.cfg.old_batch_mode:
+        #     if batch_idx != 0 and batch_idx % self.old_batch_size == 0:
+        #         optimizer = self.optimizers()
+        #         optimizer.step()
+        #         optimizer.zero_grad()
 
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('dis', dis, on_step=True, on_epoch=True, prog_bar=True, logger=True)
@@ -89,21 +94,24 @@ class DenseFusionModule(pl.LightningModule):
 
     # default check_val_every_n_epoch=1 by lightning
     def validation_step(self, batch, batch_idx):
-        points, choose, img, target, target_front, model_points, front, idx = batch
-        pred_r, pred_t, pred_c, emb = self.estimator(img, points, choose, idx)
-        _, dis, new_points, new_target, new_target_front = self.criterion(pred_r, pred_t, pred_c, target, target_front,
-                                                                          model_points, front, idx, points, self.opt.w,
-                                                                          self.opt.refine_start)
 
-        if self.opt.refine_start:
-            for ite in range(0, self.opt.iteration):
-                pred_r, pred_t = self.refiner(new_points, emb, idx)
-                loss, dis, new_points, new_target, new_target_front = self.criterion_refine(pred_r, pred_t, new_target,
-                                                                                            new_target_front, model_points,
-                                                                                            front, idx, new_points)
-        
+        end_points = batch
+
+        end_points = randla_processing(end_points, self.cfg)
+
+        #pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
+        end_points = self.estimator(end_points)
+
+        #_, dis, new_points, new_target, new_target_front = criterion(pred_r, pred_t, pred_c, target, target_front, model_points, front, idx, points, opt.w, opt.refine_start)
+        _, dis, end_points = self.criterion(end_points, self.cfg.w, self.cfg.refine_start)
+
+        if self.cfg.refine_start:
+            for ite in range(0, self.cfg.iteration):
+                end_points = self.refiner(end_points, ite)
+                _, dis, end_points = self.criterion_refine(end_points, ite)
+               
         # visualize
-        if batch_idx == 0 and self.opt.visualize:
+        if batch_idx == 0 and self.cfg.visualize:
             bs, num_p, _ = pred_c.shape
             pred_c = pred_c.view(bs, num_p)
             how_max, which_max = torch.max(pred_c, 1)
@@ -139,63 +147,61 @@ class DenseFusionModule(pl.LightningModule):
         return val_loss
 
     def validation_epoch_end(self, outputs):
-        torch.save(self.estimator.state_dict(), '{0}/pose_model_current.pth'.format(self.opt.outf))
+        torch.save(self.estimator.state_dict(), '{0}/pose_model_current.pth'.format(self.cfg.outf))
 
         test_loss = np.average(np.array(outputs))
         if test_loss <= self.best_test:
             self.best_test = test_loss
-            if self.opt.refine_start:
-                torch.save(self.refiner.state_dict(), '{0}/pose_refine_model_{1}_{2}.pth'.format(self.opt.outf,
+            if self.cfg.refine_start:
+                torch.save(self.refiner.state_dict(), '{0}/pose_refine_model_{1}_{2}.pth'.format(self.cfg.outf,
                                                                                                  self.current_epoch,
                                                                                                  test_loss))
             else:
-                torch.save(self.estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(self.opt.outf,
+                torch.save(self.estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(self.cfg.outf,
                                                                                             self.current_epoch,
                                                                                             test_loss))
         print("best_test: ", self.best_test)
 
 
-        if self.best_test < self.opt.decay_margin and not self.opt.decay_start:
-            self.opt.decay_start = True
-            self.opt.lr *= self.opt.lr_rate
-            self.opt.w *= self.opt.w_rate
-            self.trainer.optimizers[0] = optim.Adam(self.estimator.parameters(), lr=self.opt.lr)
+        if self.best_test < self.cfg.decay_margin and not self.cfg.decay_start:
+            self.cfg.decay_start = True
+            self.cfg.lr *= self.cfg.lr_rate
+            self.cfg.w *= self.cfg.w_rate
+            self.trainer.optimizers[0] = optim.Adam(self.estimator.parameters(), lr=self.cfg.lr)
 
-        if (self.current_epoch >= self.opt.refine_epoch or self.best_test < self.opt.refine_margin) and not self.opt.refine_start:
+        if (self.current_epoch >= self.cfg.refine_epoch or self.best_test < self.cfg.refine_margin) and not self.cfg.refine_start:
             print('======Refine started!========')
-            self.opt.refine_start = True
-            if self.opt.old_batch_mode:
-                self.old_batch_size = int(self.old_batch_size / self.opt.iteration)
-            self.trainer.optimizers[0] = optim.Adam(self.refiner.parameters(), lr=self.opt.lr)
+            self.cfg.refine_start = True
+            # if self.cfg.old_batch_mode:
+            #     self.old_batch_size = int(self.old_batch_size / self.cfg.iteration)
+            self.trainer.optimizers[0] = optim.Adam(self.refiner.parameters(), lr=self.cfg.lr)
 
             # re-setup dataset
             self.trainer.datamodule.setup(None)
-            self.opt.sym_list = self.trainer.datamodule.sym_list
-            self.opt.num_points_mesh = self.trainer.datamodule.num_points_mesh
-            self.criterion = Loss(self.opt.num_points_mesh, self.opt.sym_list, self.opt.use_normals)
-            self.criterion_refine = Loss_refine(self.opt.num_points_mesh, self.opt.sym_list, self.opt.use_normals)
+            self.cfg.sym_list = self.trainer.datamodule.sym_list
+            self.cfg.num_points_mesh = self.trainer.datamodule.num_points_mesh
             print("start reloading data")
             self.trainer.datamodule.train_dataloader()
             self.trainer.datamodule.val_dataloader()
+            self.criterion = Loss(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals)
+            self.criterion_refine = Loss_refine(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals)
             
 
     def configure_optimizers(self):
-        # if self.opt.resume_posenet != '':
-            # self.estimator.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_posenet)))
-            # self.estimator.load_state_dict(torch.load(self.opt.resume_posenet))
+        # if self.cfg.resume_posenet != '':
+            # self.estimator.load_state_dict(torch.load('{0}/{1}'.format(self.cfg.outf, self.cfg.resume_posenet)))
+            # self.estimator.load_state_dict(torch.load(self.cfg.resume_posenet))
 
-        if self.opt.resume_refinenet != '':
-            # self.refiner.load_state_dict(torch.load('{0}/{1}'.format(self.opt.outf, self.opt.resume_refinenet)))
-            self.refiner.load_state_dict(torch.load(self.opt.resume_refinenet))
-            self.opt.lr *= self.opt.lr_rate
-            self.opt.w *= self.opt.w_rate
-            if self.opt.old_batch_mode:
-                self.old_batch_size = int(self.old_batch_size / self.opt.iteration)
-            optimizer = optim.Adam(self.refiner.parameters(), lr=self.opt.lr)
+        if self.cfg.refine_start:
+            # self.refiner.load_state_dict(torch.load('{0}/{1}'.format(self.cfg.outf, self.cfg.resume_refinenet)))
+            self.refiner.load_state_dict(torch.load(self.cfg.resume_refinenet))
+            self.cfg.lr *= self.cfg.lr_rate
+            self.cfg.w *= self.cfg.w_rate
+            # if self.cfg.old_batch_mode:
+            #     self.old_batch_size = int(self.old_batch_size / self.cfg.iteration)
+            optimizer = optim.Adam(self.refiner.parameters(), lr=self.cfg.lr)
         else:
-            self.opt.refine_start = False
-            self.opt.decay_start = False
-            optimizer = optim.Adam(self.estimator.parameters(), lr=self.opt.lr)
+            optimizer = optim.Adam(self.estimator.parameters(), lr=self.cfg.lr)
         
         return optimizer
 

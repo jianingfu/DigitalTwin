@@ -14,7 +14,19 @@ from knn_cuda import KNN
 
 from lib.loss_helpers import FRONT_LOSS_COEFF
 
-def loss_calculation(pred_r, pred_t, target, target_front, model_points, front, idx, points, num_point_mesh, sym_list, use_normals):
+def loss_calculation(end_points, refine_iteration, num_point_mesh, sym_list, use_normals):
+
+    pred_r = end_points["refiner_pred_r_" + str(refine_iteration)]
+    pred_t = end_points["refiner_pred_t_" + str(refine_iteration)]
+    target = end_points["new_target"]
+    target_front = end_points["new_target_front"]
+    model_points = end_points["model_points"]
+    front = end_points["front"]
+    points = end_points["new_points"]
+    idx = end_points["obj_idx"]
+
+    if use_normals:
+        normals = end_points["new_normals"]
 
     knn = KNN(k=1, transpose_mode=True)
     bs, num_p, _ = pred_r.size()
@@ -25,7 +37,7 @@ def loss_calculation(pred_r, pred_t, target, target_front, model_points, front, 
     base = compute_rotation_matrix_from_ortho6d(pred_r)
     base = base.view(bs*num_p, 3, 3)
 
-
+    
     # base = torch.cat(((1.0 - 2.0*(pred_r[:, :, 2]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1),\
     #                   (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] - 2.0*pred_r[:, :, 0]*pred_r[:, :, 3]).view(bs, num_p, 1), \
     #                   (2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
@@ -75,10 +87,10 @@ def loss_calculation(pred_r, pred_t, target, target_front, model_points, front, 
     target = target.detach()
 
     #print("shapes before diff", pred.shape, target.shape)
-
+    
     dis = torch.mean(torch.norm((pred - target), dim=3), dim=2)
     dis_front = torch.mean(torch.norm((pred_front - target_front), dim=3), dim=2)
-
+    
     loss = torch.sum(torch.mean(dis + FRONT_LOSS_COEFF * dis_front, dim=1))
 
     #print("dis shape", dis.shape)
@@ -89,13 +101,7 @@ def loss_calculation(pred_r, pred_t, target, target_front, model_points, front, 
 
     t = ori_t[:,0]
 
-    if use_normals:
-        points = points.contiguous().view(bs, num_input_points, 6)
-        normals = points[:,:,3:].contiguous()
-        points = points[:,:,:3].contiguous()
-    else:
-        points = points.contiguous().view(bs, num_input_points, 3)
-
+    points = points.contiguous().view(bs, num_input_points, 3)
 
     ori_base = ori_base.view(bs, 3, 3).contiguous()
     ori_t = t.repeat(1, num_input_points, 1).contiguous().view(bs, num_input_points, 3)
@@ -103,8 +109,7 @@ def loss_calculation(pred_r, pred_t, target, target_front, model_points, front, 
 
     if use_normals:
         normals = normals.view(bs, num_input_points, 3)
-        new_normals = torch.bmm((normals - ori_t), ori_base).contiguous()
-        new_points = torch.concat((new_points, new_normals), dim=2)
+        new_normals = torch.bmm(normals, ori_base).contiguous()
 
     new_target = ori_target.view(bs, num_point_mesh, 3).contiguous()
     ori_t = t.repeat(1, num_point_mesh, 1).contiguous().view(bs, num_point_mesh, 3)
@@ -113,12 +118,17 @@ def loss_calculation(pred_r, pred_t, target, target_front, model_points, front, 
     new_target_front = target_front.view(bs, 1, 3).contiguous()
     ori_t = t.view(bs, 1, 3)
     new_target_front = torch.bmm((new_target_front - ori_t), ori_base).contiguous()
-
+ 
     dis = torch.mean(dis)
+
+    end_points["new_points"] = new_points.detach()
+    end_points["new_normals"] = new_normals.detach()
+    end_points["new_target"] = new_target.detach()
+    end_points["new_target_front"] = new_target_front.detach()
 
     # print('------------> ', dis.item(), idx[0].item())
     del knn
-    return loss, dis, new_points.detach(), new_target.detach(), new_target_front.detach()
+    return loss, dis, end_points
 
 
 class Loss_refine(_Loss):
@@ -129,5 +139,5 @@ class Loss_refine(_Loss):
         self.sym_list = sym_list
         self.use_normals = use_normals
 
-    def forward(self, pred_r, pred_t, target, target_front, model_points, front, idx, points):
-        return loss_calculation(pred_r, pred_t, target, target_front, model_points, front, idx, points, self.num_pt_mesh, self.sym_list, self.use_normals)
+    def forward(self, end_points, refine_iteration):
+        return loss_calculation(end_points, refine_iteration, self.num_pt_mesh, self.sym_list, self.use_normals)

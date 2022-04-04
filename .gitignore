@@ -17,11 +17,8 @@ datasets/custom/custom_preprocessed
 *.ply
 ckpt/
 tb_logs/
-<<<<<<< HEAD
 *.png
 *.egg
 archived_trained_models/*
-=======
 archived_models/*
 datasets/FallingThings/*
->>>>>>> 6d_rot

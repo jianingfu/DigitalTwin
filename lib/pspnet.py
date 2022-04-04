@@ -25,55 +25,42 @@ class PSPModule(nn.Module):
 
 
 class PSPUpsample(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, bn=False):
         super(PSPUpsample, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            nn.Conv2d(in_channels, out_channels, 3, padding=1),
-            nn.PReLU()
-        )
+        conv_layers = [nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+            nn.Conv2d(in_channels, out_channels, 3, padding=1)]
+
+        if bn:
+            conv_layers.append(nn.BatchNorm2d(out_channels))
+            
+        conv_layers.append(nn.PReLU())
+
+        self.conv = nn.Sequential(*conv_layers)
 
     def forward(self, x):
         return self.conv(x)
 
 
 class PSPNet(nn.Module):
-    def __init__(self, n_classes=21, sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet18',
-                 pretrained=False, in_channels=3):
+    def __init__(self, cfg, n_classes=21, sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet18'):
         super(PSPNet, self).__init__()
-        self.feats = getattr(extractors, backend)(pretrained, in_channels)
+        self.feats = getattr(extractors, backend)(cfg)
         self.psp = PSPModule(psp_size, 1024, sizes)
         self.drop_1 = nn.Dropout2d(p=0.3)
 
-        self.up_1 = PSPUpsample(1024, 256)
-        self.up_2 = PSPUpsample(256, 64)
-        self.up_3 = PSPUpsample(64, 64)
+        self.up_1 = PSPUpsample(1024, 256, bn=cfg.batch_norm)
+        self.up_2 = PSPUpsample(256, 64, bn=cfg.batch_norm)
+        self.up_3 = PSPUpsample(64, 64, bn=cfg.batch_norm)
 
         self.drop_2 = nn.Dropout2d(p=0.15)
 
-        #we don't want this softmax
-        # self.final = nn.Sequential(
-        #     nn.Conv2d(64, 32, kernel_size=1),
-        #     nn.LogSoftmax()
-        # )
-
-        self.final = nn.Conv2d(64, 32, kernel_size=1)
-
-        # self.final = nn.Conv2d(64, 128, kernel_size=1)
-
-        # self.final = nn.Sequential(
-        #     nn.Conv2d(64, 32, kernel_size=1),
-        #     nn.LogSoftmax()
-        # )
-
-        # self.classifier = nn.Sequential(
-        #     nn.Linear(deep_features_size, 256),
-        #     nn.ReLU(),
-        #     nn.Linear(256, n_classes)
-        # )
+        self.final = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=1),
+            nn.LogSoftmax()
+        )
 
     def forward(self, x):
-        f, class_f = self.feats(x)
+        f, class_f = self.feats(x) 
         p = self.psp(f)
         p = self.drop_1(p)
 
@@ -84,5 +71,7 @@ class PSPNet(nn.Module):
         p = self.drop_2(p)
 
         p = self.up_3(p)
-
+        
         return self.final(p)
+
+
