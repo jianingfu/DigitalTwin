@@ -73,6 +73,10 @@ class DenseFusionModule(pl.LightningModule):
         #pred_r, pred_t, pred_c, emb = estimator(end_points)
         end_points = self.estimator(end_points)
 
+        if self.cfg.center_cloud:
+            for i in range(len(end_points["cloud"])):
+                end_points["cloud"][i] += end_points["cloud_center"][i]
+
         #loss, dis, new_points, new_target, new_target_front = criterion(pred_r, pred_t, pred_c, end_points, opt.w, opt.refine_start)
         loss, dis, end_points = self.criterion(end_points, self.cfg.w, self.cfg.refine_start)
         
@@ -101,6 +105,10 @@ class DenseFusionModule(pl.LightningModule):
 
         #pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
         end_points = self.estimator(end_points)
+
+        if self.cfg.center_cloud:
+            for i in range(len(end_points["cloud"])):
+                end_points["cloud"][i] += end_points["cloud_center"][i]
 
         #_, dis, new_points, new_target, new_target_front = criterion(pred_r, pred_t, pred_c, target, target_front, model_points, front, idx, points, opt.w, opt.refine_start)
         _, dis, end_points = self.criterion(end_points, self.cfg.w, self.cfg.refine_start)

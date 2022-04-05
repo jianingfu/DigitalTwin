@@ -49,6 +49,8 @@ class Config(yaml.YAMLObject):
 
         self.basic_fusion = True #perform a basic fusion (cat) of depth and cnn features instead of dense fusion
 
+        self.center_cloud = True # center the point clouds
+        
         self.rndla_cfg = ConfigRandLA()
 
         self.resnet = "resnet18"

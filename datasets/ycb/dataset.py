@@ -340,6 +340,11 @@ class PoseDataset(data.Dataset):
 
         end_points = {}
 
+        if self.cfg.center_cloud:
+            cloud_mean = np.mean(cloud, axis=0)
+            cloud = cloud - cloud_mean
+            end_points["cloud_center"] = cloud_mean
+
         end_points["cloud"] = torch.from_numpy(cloud.astype(np.float32))
 
         if self.cfg.use_normals:
@@ -369,6 +374,7 @@ class PoseDataset(data.Dataset):
             return self.num_pt_mesh_large
         else:
             return self.num_pt_mesh_small
+
 
 class PoseDatasetAllObjects(PoseDataset):
     def __getitem__(self, index):
@@ -513,6 +519,11 @@ class PoseDatasetAllObjects(PoseDataset):
 
             end_points = {}
 
+            if self.cfg.center_cloud:
+                cloud_mean = np.mean(cloud, axis=0)
+                cloud = cloud - cloud_mean
+                end_points["cloud_center"] = cloud_mean
+
             end_points["cloud"] = torch.from_numpy(cloud.astype(np.float32))
 
             if self.cfg.use_normals:
@@ -532,7 +543,6 @@ class PoseDatasetAllObjects(PoseDataset):
             data_output.append(end_points)
 
         return data_output
-
 
 
 class PoseDatasetPoseCNNResults(PoseDataset):
