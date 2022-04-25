@@ -13,7 +13,7 @@ class Network(nn.Module):
         super().__init__()
         self.config = cfg.rndla_cfg
 
-        self.fc0 = pt_utils.Conv1d(self.config.in_c, 8, kernel_size=1, bn=cfg.batch_norm)
+        self.fc0 = pt_utils.Conv1d(3 + 3 * cfg.use_normals + 3 * cfg.use_colors, 8, kernel_size=1, bn=cfg.batch_norm)
 
         self.dilated_res_blocks = nn.ModuleList()
         d_in = 8

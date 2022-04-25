@@ -15,6 +15,7 @@ import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.autograd import Variable
+from torch.optim.lr_scheduler import CyclicLR, CosineAnnealingLR, ExponentialLR
 from lib.network import PoseNet, PoseRefineNet
 from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
@@ -38,16 +39,11 @@ class DenseFusionModule(pl.LightningModule):
         self.refiner = PoseRefineNet(cfg = self.cfg)
         self.best_test = np.Inf
         
-        # if self.cfg.old_batch_mode:
-        #     self.automatic_cfgimization = False
-        #     self.old_batch_size = cfg.batch_size
-        #     self.cfg.batch_size = 1
-        #     self.cfg.image_size = -1
 
     def on_pretrain_routine_start(self):
         self.cfg.sym_list = self.trainer.datamodule.sym_list
         self.cfg.num_points_mesh = self.trainer.datamodule.num_points_mesh
-        self.criterion = Loss(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals)
+        self.criterion = Loss(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals, self.cfg.use_confidence)
         self.criterion_refine = Loss_refine(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals)
 
     def on_train_epoch_start(self):
@@ -68,14 +64,11 @@ class DenseFusionModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         end_points = batch
-        end_points = randla_processing(end_points, self.cfg)
+        if self.cfg.pcld_encoder == "randlanet":
+            end_points = randla_processing(end_points, self.cfg)
 
         #pred_r, pred_t, pred_c, emb = estimator(end_points)
         end_points = self.estimator(end_points)
-
-        if self.cfg.center_cloud:
-            for i in range(len(end_points["cloud"])):
-                end_points["cloud"][i] += end_points["cloud_center"][i]
 
         #loss, dis, new_points, new_target, new_target_front = criterion(pred_r, pred_t, pred_c, end_points, opt.w, opt.refine_start)
         loss, dis, end_points = self.criterion(end_points, self.cfg.w, self.cfg.refine_start)
@@ -86,12 +79,6 @@ class DenseFusionModule(pl.LightningModule):
                 loss, dis, end_points = self.criterion_refine(end_points, ite)
                 loss.backward()
 
-        # if self.cfg.old_batch_mode:
-        #     if batch_idx != 0 and batch_idx % self.old_batch_size == 0:
-        #         optimizer = self.optimizers()
-        #         optimizer.step()
-        #         optimizer.zero_grad()
-
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('dis', dis, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
@@ -100,15 +87,12 @@ class DenseFusionModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
 
         end_points = batch
-
-        end_points = randla_processing(end_points, self.cfg)
+        if self.cfg.pcld_encoder == "randlanet":
+            end_points = randla_processing(end_points, self.cfg)
 
         #pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
         end_points = self.estimator(end_points)
 
-        if self.cfg.center_cloud:
-            for i in range(len(end_points["cloud"])):
-                end_points["cloud"][i] += end_points["cloud_center"][i]
 
         #_, dis, new_points, new_target, new_target_front = criterion(pred_r, pred_t, pred_c, target, target_front, model_points, front, idx, points, opt.w, opt.refine_start)
         _, dis, end_points = self.criterion(end_points, self.cfg.w, self.cfg.refine_start)
@@ -173,7 +157,6 @@ class DenseFusionModule(pl.LightningModule):
 
         if self.best_test < self.cfg.decay_margin and not self.cfg.decay_start:
             self.cfg.decay_start = True
-            self.cfg.lr *= self.cfg.lr_rate
             self.cfg.w *= self.cfg.w_rate
             self.trainer.optimizers[0] = optim.Adam(self.estimator.parameters(), lr=self.cfg.lr)
 
@@ -191,7 +174,7 @@ class DenseFusionModule(pl.LightningModule):
             print("start reloading data")
             self.trainer.datamodule.train_dataloader()
             self.trainer.datamodule.val_dataloader()
-            self.criterion = Loss(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals)
+            self.criterion = Loss(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals, self.cfg.use_confidence)
             self.criterion_refine = Loss_refine(self.cfg.num_points_mesh, self.cfg.sym_list, self.cfg.use_normals)
             
 
@@ -203,7 +186,6 @@ class DenseFusionModule(pl.LightningModule):
         if self.cfg.refine_start:
             # self.refiner.load_state_dict(torch.load('{0}/{1}'.format(self.cfg.outf, self.cfg.resume_refinenet)))
             self.refiner.load_state_dict(torch.load(self.cfg.resume_refinenet))
-            self.cfg.lr *= self.cfg.lr_rate
             self.cfg.w *= self.cfg.w_rate
             # if self.cfg.old_batch_mode:
             #     self.old_batch_size = int(self.old_batch_size / self.cfg.iteration)
@@ -211,7 +193,23 @@ class DenseFusionModule(pl.LightningModule):
         else:
             optimizer = optim.Adam(self.estimator.parameters(), lr=self.cfg.lr)
         
-        return optimizer
+        if self.cfg.lr_scheduler == "cyclic":
+            clr_div = 6
+            lr_scheduler = CyclicLR(
+                optimizer, base_lr=1e-5, max_lr=3e-4,
+                cycle_momentum=False,
+                step_size_up=self.cfg.nepoch * (len(dataset) / self.cfg.batch_size) // clr_div,
+                step_size_down=self.cfg.nepoch * (len(dataset) / self.cfg.batch_size) // clr_div,
+                mode='triangular'
+            )
+        elif self.cfg.lr_scheduler == "cosine":
+            lr_scheduler = CosineAnnealingLR(optimizer, T_max=self.cfg.nepoch * (len(dataset) / self.cfg.batch_size))
+        elif self.cfg.lr_scheduler == "exponential":
+            lr_scheduler = ExponentialLR(optimizer, 0.9)
+        else:
+            lr_scheduler = None
+        
+        return [optimizer], [lr_scheduler]
 
 
     def visualize_pointcloud(self, points):

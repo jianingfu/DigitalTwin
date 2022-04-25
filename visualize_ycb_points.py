@@ -27,6 +27,8 @@ from lib.randla_utils import randla_processing
 from cfg.config import YCBConfig as Config, write_config
 from DenseFusionModule import DenseFusionModule
 
+from lib.loss import Loss
+
 try:
     from lib.tools import compute_rotation_matrix_from_ortho6d
 except:
@@ -37,15 +39,14 @@ import open3d as o3d
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', type=str, default = 'trained_models/ycb/pose_model_current.pth',  help='resume PoseNet model')
-parser.add_argument('--refine_model', type=str, default = '',  help='resume PoseRefineNet model')
+parser.add_argument('--checkpoint_path', type=str, default = 'ckpt/df-epoch=25-val_dis=0.01744.ckpt',  help='resume PoseNet model')
+parser.add_argument('--refine_model', type=bool, default = False,  help='resume PoseRefineNet model')
 parser.add_argument('--output', type=str, default='visualization', help='output for point vis')
 parser.add_argument('--use_posecnn_rois', action="store_true", default=False, help="use the posecnn roi's")
 opt = parser.parse_args()
 
 cfg = Config()
-
-opt.checkpoint_path = 'ckpt/last.ckpt'
+cfg.refine_start = opt.refine_model != ''
 
 if opt.use_posecnn_rois:
     from datasets.ycb.dataset import PoseDatasetPoseCNNResults as PoseDataset
@@ -70,7 +71,7 @@ iteration = 2
 batch_size = 1
 workers = 1
 
-posecnn_results = "YCB_Video_toolbox/results_PoseCNN_RSS2018"
+cfg.posecnn_results = "YCB_Video_toolbox/results_PoseCNN_RSS2018"
 
 def get_pointcloud(model_points, t, rot_mat):
 
@@ -93,18 +94,19 @@ def main():
 
     df_module = DenseFusionModule.load_from_checkpoint(cfg = cfg, checkpoint_path = opt.checkpoint_path)
     estimator = df_module.estimator
-    estimator = nn.DataParallel(estimator)
+
+    # estimator = nn.DataParallel(estimator)
     estimator.cuda()
     estimator.eval()
 
     
-    if opt.refine_model != '':
+    if opt.refine_model:
         refiner = df_module.refiner
         refiner.cuda()
         refiner.eval()
 
     if opt.use_posecnn_rois:
-        test_dataset = PoseDataset('train', cfg = cfg)
+        test_dataset = PoseDataset('test', cfg = cfg)
     else:
         test_dataset = PoseDataset('test', cfg = cfg)
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=workers)
@@ -132,39 +134,44 @@ def main():
 
                 end_points = end_points_cuda
 
-                end_points = randla_processing(end_points, cfg)
+                if cfg.pcld_encoder == "randlanet":
+                    end_points = randla_processing(end_points, cfg)
 
                 cam_fx, cam_fy, cam_cx, cam_cy = [x.item() for x in intr]
                                                                         
                 end_points = estimator(end_points)
 
-                if cfg.center_cloud:
-                    for i in range(len(end_points["cloud"])):
-                        end_points["cloud"][i] += end_points["cloud_center"][i]
-
                 pred_r = end_points["pred_r"]
                 pred_t = end_points["pred_t"]
-                pred_c = end_points["pred_c"]
-                points = end_points["cloud"]
+                points = end_points["cloud"] + end_points["cloud_mean"]
                 model_points = end_points["model_points"]
+
+                bs, num_p, _ = pred_t.shape
 
                 if cfg.use_normals:
                     normals = end_points["normals"]
 
-                bs, num_p, _ = pred_c.shape
-                pred_c = pred_c.view(bs, num_p)
-                how_max, which_max = torch.max(pred_c, 1)
-                pred_t = pred_t.view(bs * num_p, 1, 3)
+                if cfg.use_confidence:
+                    pred_c = end_points["pred_c"]
+                    pred_c = pred_c.view(bs, num_p)
+                    how_max, which_max = torch.max(pred_c, 1)
+                    pred_t = pred_t.view(bs * num_p, 1, 3)
 
-                my_r = pred_r[0][which_max[0]].view(-1).unsqueeze(0).unsqueeze(0)
+                    my_r = pred_r[0][which_max[0]].view(-1).unsqueeze(0).unsqueeze(0)
 
-                my_rot_mat = compute_rotation_matrix_from_ortho6d(my_r)[0].cpu().data.numpy()
+                    my_rot_mat = compute_rotation_matrix_from_ortho6d(my_r)[0].cpu().data.numpy()
 
-                points = points.contiguous().view(bs*num_p, 1, 3)
+                    points = points.contiguous().view(bs*num_p, 1, 3)
 
-                my_t = (points + pred_t)[which_max[0]].view(-1).cpu().data.numpy()
+                    my_t = (points + pred_t)[which_max[0]].view(-1).cpu().data.numpy()
+                else:
 
-                if opt.refine_model != "":
+                    my_r = torch.mean(pred_r, dim=1, keepdim=True)
+                    pred_t = points + pred_t
+                    my_t = torch.mean(pred_t, dim=1).view(-1).cpu().data.numpy()
+                    my_rot_mat = compute_rotation_matrix_from_ortho6d(my_r)[0].cpu().data.numpy()
+
+                if opt.refine_model:
                     for ite in range(0, cfg.iteration):
                         T = Variable(torch.from_numpy(my_t.astype(np.float32))).cuda().view(1, 3).repeat(num_p, 1).contiguous().view(1, num_p, 3)
                         rot_mat = my_rot_mat

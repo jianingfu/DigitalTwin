@@ -122,7 +122,8 @@ def loss_calculation(end_points, refine_iteration, num_point_mesh, sym_list, use
     dis = torch.mean(dis)
 
     end_points["new_points"] = new_points.detach()
-    end_points["new_normals"] = new_normals.detach()
+    if use_normals:
+        end_points["new_normals"] = new_normals.detach()
     end_points["new_target"] = new_target.detach()
     end_points["new_target_front"] = new_target_front.detach()
 

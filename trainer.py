@@ -15,7 +15,7 @@ from cfg.config import YCBConfig as Config
 parser = argparse.ArgumentParser()
 parser.add_argument('--resume_posenet', type=str, default = '',  help='resume PoseNet model') # ckpt/last.ckpt
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
-parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
+parser.add_argument('--start_epoch', type=int, default = 0, help='which epoch to start')
 opt = parser.parse_args()
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
@@ -49,10 +49,12 @@ if __name__ == '__main__':
     logger = TensorBoardLogger("tb_logs", name="dense_fusion")
     trainer = pl.Trainer(logger=logger, 
                             callbacks=[checkpoint_callback],
-                            max_epochs=cfg.nepoch - opt.start_epoch,
+                            max_epochs=cfg.nepoch,
                             check_val_every_n_epoch=cfg.repeat_epoch,
-                            gpus=1,
-                            profiler="advanced",
+                            accelerator="gpu",
+                            devices=[1], 
+                            strategy="ddp",
+                            profiler="simple",
                             resume_from_checkpoint= opt.resume_posenet,
                             )
     if opt.resume_posenet:

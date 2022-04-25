@@ -183,11 +183,14 @@ class ResNet(nn.Module):
                 self.current_stride = self.current_stride * stride
 
             # We don't dilate 1x1 convolution.
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
+
+            downsample_layers = [nn.Conv2d(self.inplanes, planes * block.expansion,
+                            kernel_size=1, stride=stride, bias=False)]
+
+            if self.bn:
+                    downsample_layers.append(nn.BatchNorm2d(planes * block.expansion))
+
+            downsample = nn.Sequential(*downsample_layers)
 
         layers = []
         layers.append(block(self.inplanes, planes, stride, downsample, dilation=self.current_dilation, bn=bn))

@@ -55,8 +55,7 @@ class PSPNet(nn.Module):
         self.drop_2 = nn.Dropout2d(p=0.15)
 
         self.final = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=1),
-            nn.LogSoftmax()
+            nn.Conv2d(64, 32, kernel_size=1)
         )
 
     def forward(self, x):
